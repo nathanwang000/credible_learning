@@ -1,0 +1,5 @@
+I need to refactor this code
+
+1) use pytorch dataset for feeding in dataset
+2) use haozhu's data
+3) run using haozhu's data
