@@ -6,10 +6,11 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 class Mimic2(Dataset):
 
-    def __init__(self, mode='dead'):
+    def __init__(self, mode='dead', random_risk=False, expert_feature_only=False):
         '''
         mode in [dead, survivor, total]: ways to impute missingness
         '''
@@ -22,7 +23,29 @@ class Mimic2(Dataset):
                                                                          test_size=0.25,
                                                                          random_state=42,
                                                                          stratify=self.y)
-        
+
+        if expert_feature_only:
+            pass # todo
+
+        # standardize model
+        scaler = StandardScaler()
+        scaler.fit(self.xtrain)
+        self.xtrain = scaler.transform(self.xtrain)
+        self.xval = scaler.transform(self.xval)
+        self.ytrain = self.ytrain.as_matrix()
+        self.yval = self.yval.as_matrix()
+
+        # risk factors to use
+        self.r = Variable(torch.FloatTensor(list(map(lambda name: 1 \
+                                                     if 'worst' in name else 0,
+                                                     self.x.columns))))
+        if random_risk:
+            # nones = int(sum(self.r).data[0])
+            # r = np.zeros_like(self.r.data.numpy())
+            # r[:nones] = 1
+            r = np.random.permutation(self.r.data.numpy())            
+            self.r = Variable(torch.from_numpy(r))
+
     def __len__(self):
         return len(self.data)
     

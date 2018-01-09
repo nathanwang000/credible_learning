@@ -6,7 +6,7 @@ from torch.autograd import Variable
 from lib.model import LR
 from torch.utils.data import DataLoader
 import time, math
-from lib.utility import timeSince, data_shuffle, model_acc, calc_loss
+from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
 from sklearn.metrics import accuracy_score
 
 def np2tensor(x, y):
@@ -79,11 +79,11 @@ class Trainer(object):
                                                            (n_epochs * n) * 100,
                                                            timeSince(time_start),
                                                            cost,
-                                                           model_acc(self.model,
+                                                           model_auc(self.model,
                                                                      data)))
                     if valdata is not None:
                         vallosses.append(calc_loss(self.model, valdata, self.loss))
-                        to_print += "%.4f" % model_acc(self.model, valdata)
+                        to_print += "%.4f" % model_auc(self.model, valdata)
                         
                     print(to_print)
                     torch.save(self.model, 'models/%s.pt' % self.name)

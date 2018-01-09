@@ -5,7 +5,8 @@ import torch.nn.functional as F
 
 class LR(nn.Module): # logistic regression with 2 neurons
     def __init__(self, input_size, output_size):
-        super(LR, self).__init__()
+        super().__init__()
+        
         self.i2o = nn.Linear(input_size, output_size)
         self.softmax = nn.LogSoftmax()
         
