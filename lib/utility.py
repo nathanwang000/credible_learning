@@ -5,7 +5,10 @@ from torch.autograd import Variable
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.metrics import average_precision_score, confusion_matrix
 import numpy as np
+import time
 import matplotlib.pyplot as plt
+from torch.utils.data.sampler import WeightedRandomSampler
+from torch.utils.data import DataLoader
 
 def timeSince(since):
     now = time.time()
@@ -65,10 +68,6 @@ def calcAP(ytrue, ypred):
     
 def plotAUC(m, model, valdata):
     # m is a dataset in data.py
-    X_test = m.xval
-    y_test = m.yval
-    X_train = m.xtrain
-    y_train = m.ytrain
     y_test, y_score = get_y_yhat(model, valdata)
     y_score = y_score[:, 1]
     # Compute ROC curve and ROC area for each class
@@ -126,3 +125,15 @@ def sweepS1(model, valdata, plot=False, mode='s1'):
         plt.show()
         
     return t, getS1(t)
+
+def sparsity(param, threshold=0.01):
+    # percentagge of near-zero features <= 0.01 of the largest absolute feature weight
+    # param is a numpy array
+    absparam = np.abs(param)
+    return (absparam <= threshold * absparam.max()).sum() / np.ones_like(absparam).sum()
+
+def bootstrap(valdata):
+    num_samples = len(valdata.dataset)
+    sampler = WeightedRandomSampler(np.ones(num_samples), num_samples)
+    return DataLoader(valdata.dataset, batch_size=valdata.batch_size,
+                      sampler=sampler)

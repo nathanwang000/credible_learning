@@ -15,6 +15,8 @@ def map_parallel(f, tasks, n_cpus=None):
     f: function to apply
     tasks: list of argument lists
     '''
+    if len(tasks) == 0: return []
+    
     if n_cpus is None:
         n_cpus = min(int(multiprocessing.cpu_count() / 2), len(tasks))
 

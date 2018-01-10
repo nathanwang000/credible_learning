@@ -1,5 +1,3 @@
-I need to refactor this code
-
-1) add in sparsity
-2) add cross validation
-3) add expert features only
+1) add cross validation
+2) bootstrap 750 samples and select on auc and sparsity
+3) retrain using full train data

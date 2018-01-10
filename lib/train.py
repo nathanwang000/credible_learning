@@ -58,6 +58,7 @@ class Trainer(object):
                 valdata=None):
         '''
         fit a model to x, y data by batch
+        print_every is 0 if do not wish to print
         '''
         time_start = time.time()
         losses = []
@@ -72,7 +73,7 @@ class Trainer(object):
                 m = x_batch.size(0)                
                 cost += 1 / (k+1) * (regret/m - cost)
                 
-                if k % print_every == 0:
+                if print_every != 0 and k % print_every == 0:
                     losses.append(cost)
                     # progress, time, avg loss, auc
                     to_print = ('%.2f%% (%s) %.4f %.4f' % ((epoch * n + (k+1) * m) /
@@ -113,7 +114,7 @@ class Trainer(object):
                 m = end-start
                 cost += 1 / (k+1) * (regret/m - cost)
                 
-                if k % print_every == 0:
+                if print_every != 0 and k % print_every == 0:
                     losses.append(cost)
                     print('%.2f%% (%s) %.4f' % ((epoch * n + (k+1) * (end-start)) /
                                                 (n_epochs * n) * 100, # progress
