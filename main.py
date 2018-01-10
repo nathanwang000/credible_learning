@@ -102,9 +102,12 @@ def random_risk_exp(n_cpus=None, n_bootstrap=30):
     b = np.argmax(aucs.mean(0))
     discardset = set([])
     for a in range(len(models)):
-        t, p = ttest_rel(aucs[:,a], aucs[:,b])
-        if t < 0 and p < 0.05:
+        diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
+        if diffs.sum() / diffs.shape[0] <= 0.05:
             discardset.add(a)
+        # t, p = ttest_rel(aucs[:,a], aucs[:,b])
+        # if t < 0 and p < 0.05:
+        #     discardset.add(a)
     #print(discardset)
     # choose the one with largest sparsity
     chosen, sp = max(filter(lambda x: x[0] not in discardset,
@@ -131,7 +134,7 @@ def diff_regs_exp(n_cpus=None, n_bootstrap=30):
     valdata = TensorDataset(*map(lambda x: x.data, prepareData(m.xval, m.yval)))
     valdata = DataLoader(valdata, batch_size=4000, shuffle=True)    
 
-    for reg in regs:#[eye_loss]: #regs:
+    for reg in regs:
         # select for each regularization used
         aucs = []
         models = []
@@ -162,9 +165,13 @@ def diff_regs_exp(n_cpus=None, n_bootstrap=30):
         b = argsorted_means[index]
         discardset = set([])
         for a in range(len(models)):
-            t, p = ttest_rel(aucs[:,a], aucs[:,b])
-            if t < 0 and p < 0.05:
+            diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
+            if diffs.sum() / diffs.shape[0] <= 0.05:
                 discardset.add(a)
+            # paired t test too strict
+            # t, p = ttest_rel(aucs[:,a], aucs[:,b])
+            # if t < 0 and p < 0.05:
+            #     discardset.add(a)
 
         # choose the one with largest sparsity
         chosen, sp = max(filter(lambda x: x[0] not in discardset,
@@ -173,6 +180,7 @@ def diff_regs_exp(n_cpus=None, n_bootstrap=30):
 
         # retrian the chosen model
         name, m, reg, alpha = hyperparams[chosen]
+        print('alpha chosen', alpha)
         trainData(name, m, reg, alpha, test=True)
     
 
@@ -218,9 +226,12 @@ def expert_feature_only_exp(n_cpus=None, n_bootstrap=30):
     b = np.argmax(aucs.mean(0))
     discardset = set([])
     for a in range(len(models)):
-        t, p = ttest_rel(aucs[:,a], aucs[:,b])
-        if t < 0 and p < 0.05:
+        diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
+        if diffs.sum() / diffs.shape[0] <= 0.05:
             discardset.add(a)
+        # t, p = ttest_rel(aucs[:,a], aucs[:,b])
+        # if t < 0 and p < 0.05:
+        #     discardset.add(a)
     #print(discardset)
     # choose the one with largest sparsity
     chosen, sp = max(filter(lambda x: x[0] not in discardset,
@@ -233,10 +244,10 @@ def expert_feature_only_exp(n_cpus=None, n_bootstrap=30):
     
 
 #####################################################
-def run_exp(n_cpus=30):
-    random_risk_exp(n_cpus)
-    diff_regs_exp(n_cpus)    
-    expert_feature_only_exp(n_cpus)
+def run_exp(n_cpus=30, n_bootstrap=100):
+    random_risk_exp(n_cpus, n_bootstrap)
+    diff_regs_exp(n_cpus, n_bootstrap)    
+    expert_feature_only_exp(n_cpus, n_bootstrap)
 
 def main():
     run_exp()
