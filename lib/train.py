@@ -67,13 +67,15 @@ class Trainer(object):
         cost = 0 
         
         for epoch in range(n_epochs):
+
             for k, (x_batch, y_batch) in enumerate(data):
                 x_batch, y_batch = Variable(x_batch), Variable(y_batch)
                 y_hat, regret = self.step(x_batch, y_batch)
                 m = x_batch.size(0)                
                 cost += 1 / (k+1) * (regret/m - cost)
-                
+
                 if print_every != 0 and k % print_every == 0:
+                    
                     losses.append(cost)
                     # progress, time, avg loss, auc
                     to_print = ('%.2f%% (%s) %.4f %.4f' % ((epoch * n + (k+1) * m) /

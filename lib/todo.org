@@ -1,3 +1,2 @@
-1) add cross validation
-2) bootstrap 750 samples and select on auc and sparsity
-3) retrain using full train data
+1) add Cdiff environment to this codebase
+2) add data generation code to here (synthetic dataset)

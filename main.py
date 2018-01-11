@@ -12,6 +12,7 @@ from scipy.stats import ttest_rel
 from torch.autograd import Variable
 from sklearn.model_selection import train_test_split
 from sklearn.externals import joblib
+import sys
 
 def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300, 
               learning_rate=1e-3, batch_size=4000, r=None, test=False):
@@ -32,7 +33,7 @@ def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300,
         xval = m.xval
         ytrain = m.ytrain
         yval = m.yval
-        
+
     # note: for cross validation, just split data into n fold and
     # choose appropriate train_data and valdata from those folds
     # not doing here for simplicity
@@ -46,6 +47,7 @@ def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300,
     n_output = 2 # binary classification task 
     model = LR(d, n_output)
     reg_parameters = model.i2o.weight
+
     t = Trainer(model, lr=learning_rate, risk_factors=m.r, alpha=alpha,
                 regularization=regularization, reg_parameters=reg_parameters,
                 name=name)
@@ -59,99 +61,38 @@ def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300,
     joblib.dump((val_auc, ap, s1, sp), 'models/' + name + '.pkl')    
     return val_auc, ap, s1, sp
 
-def random_risk_exp(n_cpus=None, n_bootstrap=30):
-    # parameter search
-    m = Mimic2(mode='total', random_risk=True)
-    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
-    n_epochs = 300
-    reg = eye_loss
-    tasks = []
-    hyperparams = []
-    for alpha in alphas:
-        name = 'random_risk_eye' + '^' + str(alpha)
-        if not os.path.exists('models/' + name + '.pkl'):
-            tasks.append((name, m, reg, alpha))
-        hyperparams.append((name, m, reg, alpha))
-    map_parallel(trainData, tasks, n_cpus)
-
-    # select a model to run: split on auc and sparsity
-    valdata = TensorDataset(*map(lambda x: x.data, prepareData(m.xval, m.yval)))
-    valdata = DataLoader(valdata, batch_size=4000, shuffle=True)    
-    aucs = []
-    models = []
-    sparsities = []
-    for alpha in alphas:
-        # load the model        
-        name = 'random_risk_eye' + '^' + str(alpha)
-        model = torch.load('models/' + name + '.pt')
-        reg_parameters = model.i2o.weight
-        sp = sparsity((reg_parameters[1]-reg_parameters[0]).data.numpy())
-        models.append(model)
-        sparsities.append(sp)
+class ParamSearch:
+    def __init__(self, data, n_cpus=None):
+        self.tasks = []
+        self.hyperparams = []
+        self.n_cpus = n_cpus
+        self.data = data
+        valdata = TensorDataset(*map(lambda x: x.data,
+                                     prepareData(data.xval, data.yval)))
+        self.valdata = DataLoader(valdata, batch_size=4000, shuffle=True)    
         
-    for _ in range(n_bootstrap):
-        test = bootstrap(valdata)
-        local_aucs = []
-        for model in models:
-            # bootstrap for CI on auc
-            local_aucs.append(model_auc(model, test))
-        aucs.append(local_aucs)
-    aucs = np.array(aucs)
+    def add_param(self, name, reg, alpha):
+        if not os.path.exists('models/' + name + '.pkl'):        
+            self.tasks.append((name, self.data, reg, alpha))
+        self.hyperparams.append((name, reg, alpha))
 
-    # only keep those with high auc
-    b = np.argmax(aucs.mean(0))
-    discardset = set([])
-    for a in range(len(models)):
-        diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
-        if diffs.sum() / diffs.shape[0] <= 0.05:
-            discardset.add(a)
-        # t, p = ttest_rel(aucs[:,a], aucs[:,b])
-        # if t < 0 and p < 0.05:
-        #     discardset.add(a)
-    #print(discardset)
-    # choose the one with largest sparsity
-    chosen, sp = max(filter(lambda x: x[0] not in discardset,
-                            enumerate(sparsities)),
-                     key=lambda x: x[1])
+    def run(self, n_bootstrap=100):
+        map_parallel(trainData, self.tasks, self.n_cpus)
 
-    # retrian the chosen model
-    name, m, reg, alpha = hyperparams[chosen]
-    trainData(name, m, reg, alpha, test=True)
-    
-def diff_regs_exp(n_cpus=None, n_bootstrap=30):
-    m = Mimic2(mode='total')    
-    regs = [eye_loss, wridge, wlasso, lasso, enet, owl]    
-    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
-    tasks = []
-    for reg in regs:
-        for alpha in alphas:
-            name = reg.__name__ + '^' + str(alpha)
-            if not os.path.exists('models/' + name + '.pkl'):
-                tasks.append((name, m, reg, alpha))
-    map_parallel(trainData, tasks, n_cpus)
-
-    # select a model to run: split on auc and sparsity
-    valdata = TensorDataset(*map(lambda x: x.data, prepareData(m.xval, m.yval)))
-    valdata = DataLoader(valdata, batch_size=4000, shuffle=True)    
-
-    for reg in regs:
-        # select for each regularization used
+        # select a model to run: split on auc and sparsity
         aucs = []
         models = []
-        hyperparams = []
         sparsities = []
-        for alpha in alphas:
-            # load the model
-            name = reg.__name__ + '^' + str(alpha)
-            hyperparams.append((name, m, reg, alpha))            
+        for name, reg, alpha in self.hyperparams:
+            # load the model        
             model = torch.load('models/' + name + '.pt')
             reg_parameters = model.i2o.weight
             sp = sparsity((reg_parameters[1]-reg_parameters[0]).data.numpy())
             models.append(model)
             sparsities.append(sp)
-        
+
         for _ in range(n_bootstrap):
-            test = bootstrap(valdata)
+            test = bootstrap(self.valdata)
             local_aucs = []
             for model in models:
                 # bootstrap for CI on auc
@@ -160,18 +101,12 @@ def diff_regs_exp(n_cpus=None, n_bootstrap=30):
         aucs = np.array(aucs)
 
         # only keep those with high auc
-        argsorted_means = np.argsort(aucs.mean(0))
-        index = -1
-        b = argsorted_means[index]
+        b = np.argmax(aucs.mean(0))
         discardset = set([])
         for a in range(len(models)):
             diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
             if diffs.sum() / diffs.shape[0] <= 0.05:
                 discardset.add(a)
-            # paired t test too strict
-            # t, p = ttest_rel(aucs[:,a], aucs[:,b])
-            # if t < 0 and p < 0.05:
-            #     discardset.add(a)
 
         # choose the one with largest sparsity
         chosen, sp = max(filter(lambda x: x[0] not in discardset,
@@ -179,78 +114,70 @@ def diff_regs_exp(n_cpus=None, n_bootstrap=30):
                          key=lambda x: x[1])
 
         # retrian the chosen model
-        name, m, reg, alpha = hyperparams[chosen]
-        print('alpha chosen', alpha)
-        trainData(name, m, reg, alpha, test=True)
-    
+        name, reg, alpha = self.hyperparams[chosen]
+        print('name', name)        
+        trainData(name, self.data, reg, alpha, test=True)
 
-def expert_feature_only_exp(n_cpus=None, n_bootstrap=30):
-    m = Mimic2(mode='total', expert_feature_only=True)
+def random_risk_exp(n_cpus=None, n_bootstrap=30):
+    m = Mimic2(mode='total', random_risk=True)
+    ps = ParamSearch(m, n_cpus)
+
+    reg = eye_loss    
     alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
-    n_epochs = 300
+
+    for alpha in alphas:
+        name = 'random_risk_eye' + '^' + str(alpha)
+        ps.add_param(name, reg, alpha)
+
+    ps.run(n_bootstrap)
+
+def reg_exp(regs, n_cpus=None, n_bootstrap=30):
+    m = Mimic2(mode='total')
+    ps = ParamSearch(m, n_cpus)
+    
+    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+    for reg in regs:
+        for alpha in alphas:
+            name = reg.__name__ + '^' + str(alpha)
+            ps.add_param(name, reg, alpha)
+
+    ps.run(n_bootstrap)
+
+def expert_feature_only_exp(n_cpus=None, n_bootstrap=30):    
+    m = Mimic2(mode='total', expert_feature_only=True)
+    ps = ParamSearch(m, n_cpus)
+
     reg = ridge
-    tasks = []
-    hyperparams = []
+    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+
     for alpha in alphas:
         name = 'expert_only_ridge' + '^' + str(alpha)
-        if not os.path.exists('models/' + name + '.pkl'):        
-            tasks.append((name, m, reg, alpha))
-        hyperparams.append((name, m, reg, alpha))
-    map_parallel(trainData, tasks, n_cpus)
+        ps.add_param(name, reg, alpha)
 
-    # select a model to run: split on auc and sparsity
-    valdata = TensorDataset(*map(lambda x: x.data, prepareData(m.xval, m.yval)))
-    valdata = DataLoader(valdata, batch_size=4000, shuffle=True)    
-    aucs = []
-    models = []
-    sparsities = []
-    for alpha in alphas:
-        # load the model        
-        name = 'expert_only_ridge' + '^' + str(alpha)
-        model = torch.load('models/' + name + '.pt')
-        reg_parameters = model.i2o.weight
-        sp = sparsity((reg_parameters[1]-reg_parameters[0]).data.numpy())
-        models.append(model)
-        sparsities.append(sp)
-        
-    for _ in range(n_bootstrap):
-        test = bootstrap(valdata)
-        local_aucs = []
-        for model in models:
-            # bootstrap for CI on auc
-            local_aucs.append(model_auc(model, test))
-        aucs.append(local_aucs)
-    aucs = np.array(aucs)
+    ps.run(n_bootstrap)
 
-    # only keep those with high auc
-    b = np.argmax(aucs.mean(0))
-    discardset = set([])
-    for a in range(len(models)):
-        diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
-        if diffs.sum() / diffs.shape[0] <= 0.05:
-            discardset.add(a)
-        # t, p = ttest_rel(aucs[:,a], aucs[:,b])
-        # if t < 0 and p < 0.05:
-        #     discardset.add(a)
-    #print(discardset)
-    # choose the one with largest sparsity
-    chosen, sp = max(filter(lambda x: x[0] not in discardset,
-                            enumerate(sparsities)),
-                     key=lambda x: x[1])
-
-    # retrian the chosen model
-    name, m, reg, alpha = hyperparams[chosen]
-    trainData(name, m, reg, alpha, test=True)
     
-
 #####################################################
-def run_exp(n_cpus=30, n_bootstrap=100):
-    random_risk_exp(n_cpus, n_bootstrap)
-    diff_regs_exp(n_cpus, n_bootstrap)    
-    expert_feature_only_exp(n_cpus, n_bootstrap)
+def wridge1_5(*args, **kwargs):
+    return wridge(*args, **kwargs, w=1.5)
 
-def main():
-    run_exp()
-    
+def wridge3(*args, **kwargs):
+    return wridge(*args, **kwargs, w=3)
+
+def wlasso1_5(*args, **kwargs):
+    return wlasso(*args, **kwargs, w=1.5)
+
+def wlasso3(*args, **kwargs):
+    return wlasso(*args, **kwargs, w=3)
+
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) < 2:
+        print('please specify your function and argument to run')
+    else:
+        print(sys.argv[1:])
+        f = eval(sys.argv[1])
+        if len(sys.argv) >= 3:
+            args = eval(sys.argv[2])
+            f(args)
+        else:
+            f()

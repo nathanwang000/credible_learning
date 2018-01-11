@@ -8,7 +8,8 @@ def iterable(a):
         return True
     except:
         return False
-    
+
+
 def map_parallel(f, tasks, n_cpus=None):
     ''' 
     embrassingly parallel
@@ -22,6 +23,7 @@ def map_parallel(f, tasks, n_cpus=None):
 
     result_list = []
     pool = multiprocessing.Pool(n_cpus)
+    
     for task in tasks:
         if not iterable(task):
             task = (task,)
@@ -43,7 +45,11 @@ def map_parallel(f, tasks, n_cpus=None):
         except:
             pool.terminate()
             raise
+
+    res = [r.get() for r in result_list]
+    pool.terminate()
+    pool.close()
     print('finished preprocessing')
 
-    return [r.get() for r in result_list]
+    return res
 

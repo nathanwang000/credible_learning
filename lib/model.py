@@ -8,7 +8,7 @@ class LR(nn.Module): # logistic regression with 2 neurons
         super().__init__()
         
         self.i2o = nn.Linear(input_size, output_size)
-        self.softmax = nn.LogSoftmax()
+        self.softmax = nn.LogSoftmax(dim=1)
         
         self.output_size = output_size
         self.input_size = input_size

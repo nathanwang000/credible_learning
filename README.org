@@ -13,4 +13,11 @@
 #+LANGUAGE: en
 #+SELECT_TAGS: export
 
-Refactoring code for linear credibility project
+Eye regularization
+
+* MIMIC2 dataset
+
+#+BEGIN_SRC bash
+bash run.sh
+#+END_SRC
+

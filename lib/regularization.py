@@ -13,11 +13,11 @@ def ridge(loss, alpha, theta, r=None):
     
     return ret
 
-def wridge(loss, alpha, theta, r):
+def wridge(loss, alpha, theta, r, w=2):
     def reg(x):
         # nonlocal r # default to all unknown
         # r = r or Variable(torch.zeros(x.numel()), requires_grad=False)
-        weight = 2 - r
+        weight = w - (w-1) * r
         return 0.5 * (x * weight).dot(x * weight)
 
     def ret(yhat, y):
@@ -34,11 +34,11 @@ def lasso(loss, alpha, theta, r=None):
     
     return ret
 
-def wlasso(loss, alpha, theta, r):
+def wlasso(loss, alpha, theta, r, w=2):
     def reg(x):
         # nonlocal r # default to all unknown
         # r = r or Variable(torch.zeros(x.numel()), requires_grad=False)
-        weight = 2 - r
+        weight = w - (w-1) * r
         return torch.abs(x * weight).sum()
 
     def ret(yhat, y):
