@@ -9,6 +9,7 @@ import time
 import matplotlib.pyplot as plt
 from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
+import torch
 
 def timeSince(since):
     now = time.time()
@@ -137,3 +138,35 @@ def bootstrap(valdata):
     sampler = WeightedRandomSampler(np.ones(num_samples), num_samples)
     return DataLoader(valdata.dataset, batch_size=valdata.batch_size,
                       sampler=sampler)
+
+def var2constvar(v):
+    return Variable(v.data)
+
+def logit_elementwise_loss(o, y):
+    return torch.log(1 + torch.exp(-y * o))
+
+def prepareX(x):
+    '''
+    convert x from numpy to tensor
+    '''
+    return Variable(torch.from_numpy(x).float(), requires_grad=True)
+
+def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30):
+    '''
+    plot decision surface of a pytorch model
+    assumes model output likelihood
+    '''
+    xx, yy = np.meshgrid(np.linspace(xmin, xmax, nsteps),
+                         np.linspace(ymin, ymax, nsteps))
+    # note here assumes model gives log likelihood
+    model_input = prepareX(np.c_[xx.ravel(), yy.ravel()])
+
+    Z = model(model_input)
+    Z = Z.data.numpy()
+    #Z = np.argmax(Z, axis=1)
+    Z = (Z > 0).astype(np.int)
+    Z = Z.reshape(xx.shape)
+
+    plt.scatter(xx.ravel(), yy.ravel(), c=Z.ravel())
+    #plt.contourf(xx, yy, Z)
+    return model_input

@@ -7,7 +7,9 @@ from lib.model import LR
 from torch.utils.data import DataLoader
 import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
+from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
 from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
 
 def np2tensor(x, y):
     return torch.from_numpy(x).float(), torch.from_numpy(y).long()
@@ -133,3 +135,189 @@ class Trainer(object):
         else:
             return self.fitXy(x, y, batch_size, n_epochs, print_every, valdata)
             
+class InterpretableTrainer(Trainer):
+    def __init__(self, switchNet, weightNet, apply_f,
+                 name="name",
+                 lr=0.001,
+                 alpha=0.001):
+        '''
+        optimizer: optimization method, default to adam
+        alpha: entropy weight
+        '''
+        self.switchNet = switchNet
+        self.switch_size = switchNet.switch_size
+        self.weightNet = weightNet
+        self.apply_f = apply_f
+
+        self.name = name        
+        self.optSwitch = torch.optim.Adam(self.switchNet.parameters(), lr=lr)
+        self.optWeight = torch.optim.Adam(self.weightNet.parameters(), lr=lr)        
+        self.loss = nn.SoftMarginLoss() # logit loss
+        self.elementwise_loss = logit_elementwise_loss
+        self.alpha = alpha
+
+    def sampleZ(self, x):
+        n = x.size(0) # minibatch size        
+        # determine which line to use        
+        prob = torch.exp(self.switchNet(x)).data.numpy()
+        # sample the used line
+        z_index = [np.random.choice(self.switch_size, p=prob[i]) for i in range(n)]
+        z = np.zeros((n, self.switch_size))
+        z[np.arange(n), z_index] = 1
+        return Variable(torch.from_numpy(z)).float()
+        
+    def forward(self, x):
+        x = Variable(x.data, volatile=True).float()
+
+        # form an explanation
+        z = self.sampleZ(x)        
+        f = self.weightNet(z)
+
+        # apply f on x
+        o = self.apply_f(f, x)
+        return o
+
+    def p_z(self, x, const=False):
+        p_z_x = torch.exp(self.switchNet(x))
+        res = p_z_x.sum(0) / p_z_x.size(0)
+        if const:
+            return var2constvar(res) 
+        return res
+
+    def L(self, x, y, z, const=False):
+        f = self.weightNet(z)
+        o = self.apply_f(f, x)
+        res = self.elementwise_loss(o, y)
+        if const:
+            return var2constvar(res) 
+        return res
+        
+    def backward(self, x, y, sample=False, n_samples=30):
+
+        n = x.size(0)
+        log_p_z = torch.log(torch.clamp(self.p_z(x, const=True), 1e-10, 1))
+        log_p_z = log_p_z.expand(n, log_p_z.size(0))
+        # p_z_x = self.switchNet(x)
+        log_p_z_x = self.switchNet(x)
+        # log_p_z_x = torch.log(torch.clamp(p_z_x, 1e-10, 1))
+        switch_cost = 0
+        weight_cost = 0
+
+        if sample:
+            for i in range(n_samples):
+                z = self.sampleZ(x)
+
+                # switch net: E_z|x (L(x, y, z) - a * log p(z) - a) * d log p(z|x) / d theta                
+                data_loss = self.L(x, y, z)
+                c =  Variable(data_loss.data) - self.alpha * (log_p_z*z).sum(1)\
+                     - self.alpha
+                derivative = (log_p_z_x * z).sum(1)
+                switch_cost += c * derivative
+
+                # weight net: E_z|x d L(x, y, z) / d theta
+                weight_cost += data_loss
+
+            switch_cost /= n_samples
+            switch_cost.mean().backward()
+
+            weight_cost /= n_samples
+            weight_cost.mean().backward()
+        else:
+            p_z_x = Variable(torch.exp(log_p_z_x).data)
+            for i in range(self.switch_size):
+                z = np.zeros(self.switch_size)
+                z[i] = 1
+                z = Variable(torch.from_numpy(z).float()).expand(n, self.switch_size)
+
+                # switch net: E_z|x (L(x, y, z) - a * log p(z) - a) * d log p(z|x) / d theta                
+                data_loss = self.L(x, y, z)
+                c =  Variable(data_loss.data) - self.alpha * (log_p_z*z).sum(1)\
+                     - self.alpha
+                derivative = (log_p_z_x * z).sum(1)
+                switch_cost += p_z_x[:, i] * c * derivative
+
+                # weight net: E_z|x d L(x, y, z) / d theta
+                weight_cost += p_z_x[:, i] * data_loss
+
+            switch_cost.mean().backward()
+            weight_cost.mean().backward()
+                
+
+    def step(self, x, y):
+        '''
+        one step of training
+        return yhat, regret
+        '''
+        self.optSwitch.zero_grad()
+        self.optWeight.zero_grad()        
+        yhat = self.forward(x)
+        regret = self.loss(yhat, y)
+        self.backward(x, y)
+        self.optSwitch.step()
+        self.optWeight.step()        
+        return yhat, regret.data[0]
+
+    def fit(self, data, batch_size=100, n_epochs=10, print_every=10):
+        '''
+        fit a model to x, y data by batch
+        print_every is 0 if do not wish to print
+        '''
+        time_start = time.time()
+        losses = []
+        n = len(data.dataset)
+        cost = 0
+        count = 0
+        
+        for epoch in range(n_epochs):
+
+            for k, (x_batch, y_batch) in enumerate(data):
+                
+                x_batch, y_batch = Variable(x_batch).float(), Variable(y_batch).float()
+                y_hat, regret = self.step(x_batch, y_batch)
+                m = x_batch.size(0)                
+                cost += 1 / (k+1) * (regret/m - cost)
+
+                if print_every != 0 and count % print_every == 0:
+
+                    losses.append(cost)
+                    # progress, time, avg loss, auc
+                    to_print = ('%.2f%% (%s) %.4f' % ((epoch * n + (k+1) * m) /
+                                                      (n_epochs * n) * 100,
+                                                      timeSince(time_start),
+                                                      cost))
+                    
+                    print(to_print)
+                    self.plot()
+                    torch.save(self.switchNet,
+                               'nonlinear_models/%s^switch.pt' % self.name)
+                    torch.save(self.weightNet,
+                               'nonlinear_models/%s^weight.pt' % self.name)
+                    np.save('nonlinear_models/%s.loss' % self.name, losses)
+                    cost = 0
+                count += 1                    
+        return losses
+
+    def plot(self, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5):
+
+        plt.figure(figsize=(10,10))
+        x = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax)
+        plt.xlim([xmin, xmax])
+        # plt.ylim([ymin, ymax])        
+        c = ['r','g','b', 'purple', 'k', 'pink']
+        for i, (t1, t2, b) in enumerate(self.weightNet.explain()):
+            # t1 x + t2 y + b = 0
+            # y = - (t1 x + b) / t2
+            def l(x):
+                return - (t1 * x + b) / t2
+            plt.plot([xmin, xmax], [l(xmin), l(xmax)], c=c[i])
+            xmid = (xmin + xmax) / 2
+            direction_norm = np.sqrt((np.array([t1, t2])**2).sum())
+            plt.plot([xmid, xmid+t1/direction_norm*0.1],
+                     [l(xmid), l(xmid)+t2/direction_norm*0.1],
+                     c=c[i])
+        plt.show()
+
+        output = self.switchNet(x).data.numpy()
+        choices = output.argmax(1)
+        for i in range(self.switch_size):
+            print('probability of choosing', i, 'is', (choices == i).sum() / len(choices))

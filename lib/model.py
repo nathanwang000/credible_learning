@@ -2,24 +2,55 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
+import numpy as np
 
 ###### non linear credibility start #############
-class Switch(nn.Module): # softmax version
+# softmax version
+class Switch(nn.Module):
     def __init__(self, input_size, switch_size):
         super().__init__()
         self.i2o = nn.Sequential(
-            nn.Linear(input_size, switch_size)
+            nn.Linear(input_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, switch_size),            
         )
-
-    def forward(self, input):
-        pass
+        self.logsoftmax = nn.LogSoftmax()
+        self.switch_size = switch_size
+        
+    def forward(self, x):
+        return self.logsoftmax(self.i2o(x))
 
 class Weight(nn.Module):
-    def __init__(self):
+    def __init__(self, switch_size, param_size):
+        '''
+        param_size: number of parameters for the interpretable model
+        '''
         super().__init__()
+        self.switch_size = switch_size
+        self.i2o = nn.Sequential(
+            nn.Linear(switch_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, param_size),            
+        )
+        
+    def forward(self, x):
+        return self.i2o(x)
 
-    def forward(self, input):
-        pass
+    def explain(self):
+        explanations = []
+        for i in range(self.switch_size):
+            x = np.zeros(self.switch_size)
+            x[i] = 1
+            x = Variable(torch.from_numpy(x)).float()
+            explanations.append(list(self.forward(x).data))
+        return explanations
+
+def apply_linear(f, x): # for linear model
+    return (f[:,:-1] * x).sum(1) + f[:,-1]    
 
 ###### non linear credibility end ###############
 
