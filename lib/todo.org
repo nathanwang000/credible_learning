@@ -1,2 +1,5 @@
+linear:
 1) add Cdiff environment to this codebase
 2) add data generation code to here (synthetic dataset)
+
+

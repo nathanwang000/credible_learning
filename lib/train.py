@@ -8,8 +8,12 @@ from torch.utils.data import DataLoader
 import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
+from lib.utility import to_np, to_var
 from sklearn.metrics import accuracy_score
+from lib.settings import DISCRETE_COLORS
 import matplotlib.pyplot as plt
+from tensorboardX import SummaryWriter
+from torch.nn.utils import clip_grad_norm
 
 def np2tensor(x, y):
     return torch.from_numpy(x).float(), torch.from_numpy(y).long()
@@ -139,22 +143,31 @@ class InterpretableTrainer(Trainer):
     def __init__(self, switchNet, weightNet, apply_f,
                  name="name",
                  lr=0.001,
-                 alpha=0.001):
+                 alpha=0.001,
+                 beta=0.001,
+                 max_grad=0.1,
+                 log_name=None):
         '''
         optimizer: optimization method, default to adam
-        alpha: entropy weight
+        alpha: z entropy weight
+        beta: y entropy weight
+        max_grad: gradient clipping max
         '''
         self.switchNet = switchNet
         self.switch_size = switchNet.switch_size
         self.weightNet = weightNet
         self.apply_f = apply_f
 
+        self.log_dir = 'logs/' + ("" if log_name is None else log_name)
+        self.writer = SummaryWriter(log_dir=self.log_dir)
         self.name = name        
         self.optSwitch = torch.optim.Adam(self.switchNet.parameters(), lr=lr)
         self.optWeight = torch.optim.Adam(self.weightNet.parameters(), lr=lr)        
         self.loss = nn.SoftMarginLoss() # logit loss
         self.elementwise_loss = logit_elementwise_loss
+        self.max_grad = 0.1
         self.alpha = alpha
+        self.beta  = beta
 
     def sampleZ(self, x):
         n = x.size(0) # minibatch size        
@@ -184,6 +197,9 @@ class InterpretableTrainer(Trainer):
             return var2constvar(res) 
         return res
 
+    def entropy(px):
+        return px * torch.log(torch.clamp(px, 1e-10, 1))
+    
     def L(self, x, y, z, const=False):
         f = self.weightNet(z)
         o = self.apply_f(f, x)
@@ -195,11 +211,23 @@ class InterpretableTrainer(Trainer):
     def backward(self, x, y, sample=False, n_samples=30):
 
         n = x.size(0)
+
         log_p_z = torch.log(torch.clamp(self.p_z(x, const=True), 1e-10, 1))
         log_p_z = log_p_z.expand(n, log_p_z.size(0))
         # p_z_x = self.switchNet(x)
         log_p_z_x = self.switchNet(x)
         # log_p_z_x = torch.log(torch.clamp(p_z_x, 1e-10, 1))
+
+        # for y_entropy_loss
+        p_y_z = torch.ones((2, self.switch_size))        
+        zs = self.sampleZ(x).data.numpy().argmax(1)
+        for z in range(self.switch_size):
+            y_given_z = y.data.numpy()[zs == z]
+            for i, label in enumerate([-1, 1]):
+                p_y_z[i, z] = float((y_given_z == label).sum())
+                if y_given_z.shape[0] > 0:
+                    p_y_z[i, z] /= y_given_z.shape[0]
+
         switch_cost = 0
         weight_cost = 0
 
@@ -207,10 +235,23 @@ class InterpretableTrainer(Trainer):
             for i in range(n_samples):
                 z = self.sampleZ(x)
 
-                # switch net: E_z|x (L(x, y, z) - a * log p(z) - a) * d log p(z|x) / d theta                
+                # switch net: E_z|x (L(x, y, z)
+                # - a * log p(z) - a
+                # + b * sum_y p(y|z) log p(y|z))
+                # * d log p(z|x) / d theta
                 data_loss = self.L(x, y, z)
-                c =  Variable(data_loss.data) - self.alpha * (log_p_z*z).sum(1)\
-                     - self.alpha
+                z_entropy_loss = - (log_p_z*z).sum(1) - 1
+
+                # assume binary problem
+                y_entropy_loss = 0
+                for y_query in [0, 1]:
+                    pyz = p_y_z[y_query].expand(n, self.switch_size)
+                    pyz = (Variable(pyz) * z).sum(1)
+                    y_entropy_loss += pyz * torch.log(torch.clamp(pyz, 1e-10, 1))
+                
+                c =  Variable(data_loss.data) + \
+                     self.alpha * z_entropy_loss + \
+                     self.beta * y_entropy_loss
                 derivative = (log_p_z_x * z).sum(1)
                 switch_cost += c * derivative
 
@@ -229,10 +270,22 @@ class InterpretableTrainer(Trainer):
                 z[i] = 1
                 z = Variable(torch.from_numpy(z).float()).expand(n, self.switch_size)
 
-                # switch net: E_z|x (L(x, y, z) - a * log p(z) - a) * d log p(z|x) / d theta                
+                # switch net: E_z|x (L(x, y, z)
+                # - a * log p(z) - a
+                # + b * sum_y p(y|z) log p(y|z))
+                # * d log p(z|x) / d theta
                 data_loss = self.L(x, y, z)
-                c =  Variable(data_loss.data) - self.alpha * (log_p_z*z).sum(1)\
-                     - self.alpha
+                z_entropy_loss = - (log_p_z*z).sum(1) - 1
+                # assume binary problem
+                y_entropy_loss = 0
+                for y_query in [0, 1]:
+                    pyz = p_y_z[y_query].expand(n, self.switch_size)
+                    pyz = (Variable(pyz) * z).sum(1)
+                    y_entropy_loss += pyz * torch.log(torch.clamp(pyz, 1e-10, 1))
+
+                c =  Variable(data_loss.data) + \
+                     self.alpha * z_entropy_loss + \
+                     self.beta * y_entropy_loss
                 derivative = (log_p_z_x * z).sum(1)
                 switch_cost += p_z_x[:, i] * c * derivative
 
@@ -253,6 +306,14 @@ class InterpretableTrainer(Trainer):
         yhat = self.forward(x)
         regret = self.loss(yhat, y)
         self.backward(x, y)
+        # clip gradient here
+        clip_grad_norm(self.switchNet.parameters(), self.max_grad)
+        # # per parameter clip
+        # for p in self.switchNet.parameters():
+        #     if p.grad is None:
+        #         continue
+        #     p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
+        
         self.optSwitch.step()
         self.optWeight.step()        
         return yhat, regret.data[0]
@@ -280,6 +341,7 @@ class InterpretableTrainer(Trainer):
                 if print_every != 0 and count % print_every == 0:
 
                     losses.append(cost)
+                    
                     # progress, time, avg loss, auc
                     to_print = ('%.2f%% (%s) %.4f' % ((epoch * n + (k+1) * m) /
                                                       (n_epochs * n) * 100,
@@ -287,23 +349,34 @@ class InterpretableTrainer(Trainer):
                                                       cost))
                     
                     print(to_print)
-                    self.plot()
+                    self.plot(x_batch, y_batch)
                     torch.save(self.switchNet,
                                'nonlinear_models/%s^switch.pt' % self.name)
                     torch.save(self.weightNet,
                                'nonlinear_models/%s^weight.pt' % self.name)
                     np.save('nonlinear_models/%s.loss' % self.name, losses)
-                    cost = 0
-                count += 1                    
+
+                    self.writer.add_scalar('data/train_loss', cost,
+                                           count)
+                    for tag, value in self.switchNet.named_parameters():
+                        tag = tag.replace('.', '/')
+                        self.writer.add_histogram(tag, to_np(value), count)
+                        self.writer.add_histogram(tag+'/grad', to_np(value.grad), count)
+
+                    cost = 0                        
+                    
+                count += 1
+
+                
         return losses
 
-    def plot(self, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5):
+    def plot(self, x, y, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5):
 
         plt.figure(figsize=(10,10))
-        x = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax)
+        _ = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax, multioutput=False)
         plt.xlim([xmin, xmax])
-        # plt.ylim([ymin, ymax])        
-        c = ['r','g','b', 'purple', 'k', 'pink']
+        # plt.ylim([ymin, ymax])
+        c = DISCRETE_COLORS
         for i, (t1, t2, b) in enumerate(self.weightNet.explain()):
             # t1 x + t2 y + b = 0
             # y = - (t1 x + b) / t2
@@ -317,7 +390,24 @@ class InterpretableTrainer(Trainer):
                      c=c[i])
         plt.show()
 
-        output = self.switchNet(x).data.numpy()
+        output = self.switchNet(x).data.numpy() # p(z) = E_x p(z|x)
         choices = output.argmax(1)
         for i in range(self.switch_size):
-            print('probability of choosing', i, 'is', (choices == i).sum() / len(choices))
+            print('probability of choosing', c[i], 'is',
+                  (choices == i).sum() / len(choices))
+
+        p_y_z = torch.ones((2, self.switch_size))        
+        zs = self.sampleZ(x).data.numpy().argmax(1)
+        for z in range(self.switch_size):
+            y_given_z = y.data.numpy()[zs == z]
+            for i, label in enumerate([-1, 1]):
+                p_y_z[i, z] = float((y_given_z == label).sum())
+                if y_given_z.shape[0] > 0:
+                    p_y_z[i, z] /= y_given_z.shape[0]
+        for i in range(self.switch_size):
+            print('p(y=-1|z="%s")' % c[i], 'is', p_y_z[0, i])
+
+        # plot cluster assignment
+        x = plotDecisionSurface(self.switchNet.forward, xmin, xmax, ymin, ymax,
+                                colors=c)
+        plt.show()

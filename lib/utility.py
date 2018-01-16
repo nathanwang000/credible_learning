@@ -151,7 +151,8 @@ def prepareX(x):
     '''
     return Variable(torch.from_numpy(x).float(), requires_grad=True)
 
-def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30):
+def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
+                        multioutput=True, colors=None):
     '''
     plot decision surface of a pytorch model
     assumes model output likelihood
@@ -163,10 +164,25 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30):
 
     Z = model(model_input)
     Z = Z.data.numpy()
-    #Z = np.argmax(Z, axis=1)
-    Z = (Z > 0).astype(np.int)
-    Z = Z.reshape(xx.shape)
+    if multioutput:
+        Z = np.argmax(Z, axis=1)
+        # Z = Z.reshape(xx.shape)        
+        # plt.contourf(xx, yy, Z)
+    else:
+        Z = (Z > 0).astype(np.int)
 
-    plt.scatter(xx.ravel(), yy.ravel(), c=Z.ravel())
-    #plt.contourf(xx, yy, Z)
+    if colors:
+        colors = list(map(lambda i: colors[int(i)], Z))
+    else:
+        colors = Z
+    
+    plt.scatter(xx.ravel(), yy.ravel(), c=colors)        
     return model_input
+
+def to_np(x):
+    return x.data.cpu().numpy()
+
+def to_var(x):
+    if torch.cuda.is_available():
+        x = x.cuda()
+    return Variable(x)   

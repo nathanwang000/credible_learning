@@ -13,11 +13,14 @@
 #+LANGUAGE: en
 #+SELECT_TAGS: export
 
-Eye regularization
+* Eye regularization
 
-* MIMIC2 dataset
+** MIMIC2 dataset
 
 #+BEGIN_SRC bash
 bash run.sh
 #+END_SRC
 
+* Nonlinear interpretation
+
+run credibility.ipynb
