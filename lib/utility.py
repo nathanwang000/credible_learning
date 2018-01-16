@@ -7,9 +7,18 @@ from sklearn.metrics import average_precision_score, confusion_matrix
 import numpy as np
 import time
 import matplotlib.pyplot as plt
+import seaborn as sns
 from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
 import torch
+
+def to_np(x):
+    return x.data.cpu().numpy()
+
+def to_var(x, *args, **kwargs):
+    if torch.cuda.is_available():
+        x = x.cuda()
+    return Variable(x, *args, **kwargs)   
 
 def timeSince(since):
     now = time.time()
@@ -27,7 +36,7 @@ def get_y_yhat(model, data):
     ys = []
     for x, y in data:
         ys.append(y.numpy())
-        x, y = Variable(x), Variable(y)
+        x, y = to_var(x), to_var(y)
         yhat.append(model(x).data.numpy())
 
     return np.hstack(ys), np.vstack(yhat)
@@ -37,7 +46,7 @@ def model_auc(model, data):
     ys = []
     for x, y in data:
         ys.append(y.numpy())
-        x, y = Variable(x), Variable(y)
+        x, y = to_var(x), to_var(y)
         yhat.append(model(x).data.numpy())
     y, yhat = np.hstack(ys), np.vstack(yhat)[:,1]
     return roc_auc_score(y, yhat)    
@@ -47,7 +56,7 @@ def model_acc(model, data):
     ys = []
     for x, y in data:
         ys.append(y.numpy())
-        x, y = Variable(x), Variable(y)
+        x, y = to_var(x), to_var(y)
         yhat.append(np.argmax(model(x).data.numpy(), 1))
     y, yhat = np.hstack(ys), np.vstack(yhat)
 
@@ -57,7 +66,7 @@ def calc_loss(model, data, loss):
     cost = 0
     denom = 0
     for x, y in data:
-        x, y = Variable(x), Variable(y)
+        x, y = to_var(x), to_var(y)
         regret = loss(model(x), y).data[0]
         m = x.size(0)
         cost += regret * m
@@ -140,7 +149,7 @@ def bootstrap(valdata):
                       sampler=sampler)
 
 def var2constvar(v):
-    return Variable(v.data)
+    return to_var(v.data)
 
 def logit_elementwise_loss(o, y):
     return torch.log(1 + torch.exp(-y * o))
@@ -149,7 +158,7 @@ def prepareX(x):
     '''
     convert x from numpy to tensor
     '''
-    return Variable(torch.from_numpy(x).float(), requires_grad=True)
+    return to_var(torch.from_numpy(x).float(), requires_grad=True)
 
 def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
                         multioutput=True, colors=None):
@@ -163,7 +172,7 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
     model_input = prepareX(np.c_[xx.ravel(), yy.ravel()])
 
     Z = model(model_input)
-    Z = Z.data.numpy()
+    Z = to_np(Z)
     if multioutput:
         Z = np.argmax(Z, axis=1)
         # Z = Z.reshape(xx.shape)        
@@ -179,10 +188,3 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
     plt.scatter(xx.ravel(), yy.ravel(), c=colors)        
     return model_input
 
-def to_np(x):
-    return x.data.cpu().numpy()
-
-def to_var(x):
-    if torch.cuda.is_available():
-        x = x.cuda()
-    return Variable(x)   

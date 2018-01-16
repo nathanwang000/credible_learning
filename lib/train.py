@@ -22,7 +22,7 @@ def prepareData(x, y):
     ''' 
     convert x, y from numpy to tensor
     '''
-    return Variable(torch.from_numpy(x).float()), Variable(torch.from_numpy(y).long())
+    return to_var(torch.from_numpy(x).float()), to_var(torch.from_numpy(y).long())
 
 class Trainer(object):
     def __init__(self, model, optimizer=None,
@@ -75,7 +75,7 @@ class Trainer(object):
         for epoch in range(n_epochs):
 
             for k, (x_batch, y_batch) in enumerate(data):
-                x_batch, y_batch = Variable(x_batch), Variable(y_batch)
+                x_batch, y_batch = to_var(x_batch), to_var(y_batch)
                 y_hat, regret = self.step(x_batch, y_batch)
                 m = x_batch.size(0)                
                 cost += 1 / (k+1) * (regret/m - cost)
@@ -153,6 +153,10 @@ class InterpretableTrainer(Trainer):
         beta: y entropy weight
         max_grad: gradient clipping max
         '''
+        if torch.cuda.is_available():
+            switchNet.cuda()
+            weightNet.cuda()
+        
         self.switchNet = switchNet
         self.switch_size = switchNet.switch_size
         self.weightNet = weightNet
@@ -172,15 +176,15 @@ class InterpretableTrainer(Trainer):
     def sampleZ(self, x):
         n = x.size(0) # minibatch size        
         # determine which line to use        
-        prob = torch.exp(self.switchNet(x)).data.numpy()
+        prob = to_np(torch.exp(self.switchNet(x)))
         # sample the used line
         z_index = [np.random.choice(self.switch_size, p=prob[i]) for i in range(n)]
         z = np.zeros((n, self.switch_size))
         z[np.arange(n), z_index] = 1
-        return Variable(torch.from_numpy(z)).float()
+        return to_var(torch.from_numpy(z)).float()
         
     def forward(self, x):
-        x = Variable(x.data, volatile=True).float()
+        x = to_var(x.data, volatile=True).float()
 
         # form an explanation
         z = self.sampleZ(x)        
@@ -220,9 +224,9 @@ class InterpretableTrainer(Trainer):
 
         # for y_entropy_loss
         p_y_z = torch.ones((2, self.switch_size))        
-        zs = self.sampleZ(x).data.numpy().argmax(1)
+        zs = to_np(self.sampleZ(x)).argmax(1)
         for z in range(self.switch_size):
-            y_given_z = y.data.numpy()[zs == z]
+            y_given_z = to_np(y)[zs == z]
             for i, label in enumerate([-1, 1]):
                 p_y_z[i, z] = float((y_given_z == label).sum())
                 if y_given_z.shape[0] > 0:
@@ -246,10 +250,10 @@ class InterpretableTrainer(Trainer):
                 y_entropy_loss = 0
                 for y_query in [0, 1]:
                     pyz = p_y_z[y_query].expand(n, self.switch_size)
-                    pyz = (Variable(pyz) * z).sum(1)
+                    pyz = (to_var(pyz) * z).sum(1)
                     y_entropy_loss += pyz * torch.log(torch.clamp(pyz, 1e-10, 1))
                 
-                c =  Variable(data_loss.data) + \
+                c =  to_var(data_loss.data) + \
                      self.alpha * z_entropy_loss + \
                      self.beta * y_entropy_loss
                 derivative = (log_p_z_x * z).sum(1)
@@ -264,11 +268,11 @@ class InterpretableTrainer(Trainer):
             weight_cost /= n_samples
             weight_cost.mean().backward()
         else:
-            p_z_x = Variable(torch.exp(log_p_z_x).data)
+            p_z_x = to_var(torch.exp(log_p_z_x).data)
             for i in range(self.switch_size):
                 z = np.zeros(self.switch_size)
                 z[i] = 1
-                z = Variable(torch.from_numpy(z).float()).expand(n, self.switch_size)
+                z = to_var(torch.from_numpy(z).float()).expand(n, self.switch_size)
 
                 # switch net: E_z|x (L(x, y, z)
                 # - a * log p(z) - a
@@ -280,10 +284,10 @@ class InterpretableTrainer(Trainer):
                 y_entropy_loss = 0
                 for y_query in [0, 1]:
                     pyz = p_y_z[y_query].expand(n, self.switch_size)
-                    pyz = (Variable(pyz) * z).sum(1)
+                    pyz = (to_var(pyz) * z).sum(1)
                     y_entropy_loss += pyz * torch.log(torch.clamp(pyz, 1e-10, 1))
 
-                c =  Variable(data_loss.data) + \
+                c =  to_var(data_loss.data) + \
                      self.alpha * z_entropy_loss + \
                      self.beta * y_entropy_loss
                 derivative = (log_p_z_x * z).sum(1)
@@ -333,7 +337,7 @@ class InterpretableTrainer(Trainer):
 
             for k, (x_batch, y_batch) in enumerate(data):
                 
-                x_batch, y_batch = Variable(x_batch).float(), Variable(y_batch).float()
+                x_batch, y_batch = to_var(x_batch).float(), to_var(y_batch).float()
                 y_hat, regret = self.step(x_batch, y_batch)
                 m = x_batch.size(0)                
                 cost += 1 / (k+1) * (regret/m - cost)
@@ -373,7 +377,9 @@ class InterpretableTrainer(Trainer):
     def plot(self, x, y, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5):
 
         plt.figure(figsize=(10,10))
-        _ = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax, multioutput=False)
+        _ = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax,
+                                multioutput=False, colors=['white', 'black',
+                                                           'green'])
         plt.xlim([xmin, xmax])
         # plt.ylim([ymin, ymax])
         c = DISCRETE_COLORS
@@ -390,16 +396,16 @@ class InterpretableTrainer(Trainer):
                      c=c[i])
         plt.show()
 
-        output = self.switchNet(x).data.numpy() # p(z) = E_x p(z|x)
+        output = to_np(self.switchNet(x)) # p(z) = E_x p(z|x)
         choices = output.argmax(1)
         for i in range(self.switch_size):
             print('probability of choosing', c[i], 'is',
                   (choices == i).sum() / len(choices))
 
         p_y_z = torch.ones((2, self.switch_size))        
-        zs = self.sampleZ(x).data.numpy().argmax(1)
+        zs = to_np(self.sampleZ(x)).argmax(1)
         for z in range(self.switch_size):
-            y_given_z = y.data.numpy()[zs == z]
+            y_given_z = to_np(y)[zs == z]
             for i, label in enumerate([-1, 1]):
                 p_y_z[i, z] = float((y_given_z == label).sum())
                 if y_given_z.shape[0] > 0:

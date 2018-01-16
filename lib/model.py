@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
+from lib.utility import to_np, to_var
 
 ###### non linear credibility start #############
 # softmax version
@@ -45,8 +46,8 @@ class Weight(nn.Module):
         for i in range(self.switch_size):
             x = np.zeros(self.switch_size)
             x[i] = 1
-            x = Variable(torch.from_numpy(x)).float()
-            explanations.append(list(self.forward(x).data))
+            x = to_var(torch.from_numpy(x)).float()
+            explanations.append(list(to_np(self.forward(x))))
         return explanations
 
 def apply_linear(f, x): # for linear model
@@ -109,7 +110,7 @@ class RNN(nn.Module): # simple 1 layer rnn
         return output, hidden
 
     def initHidden(self):
-        return Variable(torch.zeros(1, self.hidden_size))
+        return to_var(torch.zeros(1, self.hidden_size))
 
 class RNN2(nn.Module): # canonical RNN pytorch with added output layer
     def __init__(self, input_size, hidden_size, output_size):
@@ -130,7 +131,7 @@ class RNN2(nn.Module): # canonical RNN pytorch with added output layer
         return output, hidden
 
     def initHidden(self):
-        return Variable(torch.zeros(1, self.hidden_size))
+        return to_var(torch.zeros(1, self.hidden_size))
     
 class LSTM(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
@@ -153,8 +154,8 @@ class LSTM(nn.Module):
         return output, hidden
 
     def initHidden(self):
-        return (Variable(torch.zeros(1, self.hidden_size)),
-                Variable(torch.zeros(1, self.hidden_size)))
+        return (to_var(torch.zeros(1, self.hidden_size)),
+                to_var(torch.zeros(1, self.hidden_size)))
         
 class GRU(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
@@ -176,5 +177,5 @@ class GRU(nn.Module):
         return output, hidden
 
     def initHidden(self):
-        return Variable(torch.zeros(1, self.hidden_size))
+        return to_var(torch.zeros(1, self.hidden_size))
         
