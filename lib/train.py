@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
-from lib.utility import to_np, to_var
+from lib.utility import to_np, to_var, gradNorm, check_nan
 from sklearn.metrics import accuracy_score
 from lib.settings import DISCRETE_COLORS
 import matplotlib.pyplot as plt
@@ -185,13 +185,15 @@ class InterpretableTrainer(Trainer):
         
     def forward(self, x):
         x = to_var(x.data, volatile=True).float()
-
+        
         # form an explanation
-        z = self.sampleZ(x)        
+        z = self.sampleZ(x)
+        # assert not check_nan(z), to_np(z)
         f = self.weightNet(z)
 
         # apply f on x
         o = self.apply_f(f, x)
+        # assert not check_nan(o)
         return o
 
     def p_z(self, x, const=False):
@@ -310,13 +312,29 @@ class InterpretableTrainer(Trainer):
         yhat = self.forward(x)
         regret = self.loss(yhat, y)
         self.backward(x, y)
+
+        try:
+            assert np.isfinite(gradNorm(self.switchNet))
+        except:
+            print('inf gradient switchNet')
+        try:
+            assert np.isfinite(gradNorm(self.weightNet))
+        except:
+            print('inf gradient switchNet')
+        
         # clip gradient here
-        clip_grad_norm(self.switchNet.parameters(), self.max_grad)
-        # # per parameter clip
-        # for p in self.switchNet.parameters():
-        #     if p.grad is None:
-        #         continue
-        #     p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
+        # clip_grad_norm(self.switchNet.parameters(), self.max_grad)
+        # per parameter clip
+        for p in self.switchNet.parameters():
+            if p.grad is None:
+                continue
+            p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
+
+        for p in self.weightNet.parameters():
+            if p.grad is None:
+                continue
+            p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
+        
         
         self.optSwitch.step()
         self.optWeight.step()        
@@ -336,6 +354,11 @@ class InterpretableTrainer(Trainer):
         for epoch in range(n_epochs):
 
             for k, (x_batch, y_batch) in enumerate(data):
+
+                self.writer.add_scalar('switch/grad_norm', gradNorm(self.switchNet),
+                                       count)
+                self.writer.add_scalar('weight/grad_norm', gradNorm(self.weightNet),
+                                       count)
                 
                 x_batch, y_batch = to_var(x_batch).float(), to_var(y_batch).float()
                 y_hat, regret = self.step(x_batch, y_batch)
@@ -371,17 +394,21 @@ class InterpretableTrainer(Trainer):
                     
                 count += 1
 
-                
         return losses
 
-    def plot(self, x, y, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5):
+    def plot(self, x, y, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5,
+             inrange=False):
+        '''
+        inrange: if true fix y axis from ymin to ymax
+        '''
 
         plt.figure(figsize=(10,10))
         _ = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax,
                                 multioutput=False, colors=['white', 'black',
                                                            'green'])
         plt.xlim([xmin, xmax])
-        # plt.ylim([ymin, ymax])
+        if inrange:
+            plt.ylim([ymin, ymax])
         c = DISCRETE_COLORS
         for i, (t1, t2, b) in enumerate(self.weightNet.explain()):
             # t1 x + t2 y + b = 0
@@ -389,6 +416,7 @@ class InterpretableTrainer(Trainer):
             def l(x):
                 return - (t1 * x + b) / t2
             plt.plot([xmin, xmax], [l(xmin), l(xmax)], c=c[i])
+             
             xmid = (xmin + xmax) / 2
             direction_norm = np.sqrt((np.array([t1, t2])**2).sum())
             plt.plot([xmid, xmid+t1/direction_norm*0.1],

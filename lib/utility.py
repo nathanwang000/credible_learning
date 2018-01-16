@@ -20,6 +20,9 @@ def to_var(x, *args, **kwargs):
         x = x.cuda()
     return Variable(x, *args, **kwargs)   
 
+def check_nan(v):
+    return np.isnan(to_np(v)).sum() > 0
+
 def timeSince(since):
     now = time.time()
     s = now - since
@@ -172,6 +175,7 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
     model_input = prepareX(np.c_[xx.ravel(), yy.ravel()])
 
     Z = model(model_input)
+    # assert not check_nan(Z)    
     Z = to_np(Z)
     if multioutput:
         Z = np.argmax(Z, axis=1)
@@ -188,3 +192,12 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
     plt.scatter(xx.ravel(), yy.ravel(), c=colors)        
     return model_input
 
+def gradNorm(model, norm_type=2):
+    total_norm = 0
+    for p in model.parameters():
+        if p.grad is None:
+            continue
+        total_norm += p.grad.data.norm(norm_type)**norm_type
+    return total_norm**(1/norm_type)
+
+    

@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
-from lib.utility import to_np, to_var
+from lib.utility import to_np, to_var, check_nan
 
 ###### non linear credibility start #############
 # softmax version
@@ -21,7 +21,9 @@ class Switch(nn.Module):
         self.switch_size = switch_size
         
     def forward(self, x):
-        return self.logsoftmax(self.i2o(x))
+        o = self.i2o(x)
+        # assert not check_nan(o)
+        return self.logsoftmax(o)
 
 class Weight(nn.Module):
     def __init__(self, switch_size, param_size):
