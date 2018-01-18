@@ -2,4 +2,11 @@ linear:
 1) add Cdiff environment to this codebase
 2) add data generation code to here (synthetic dataset)
 
+nonlinear:
+1) check nan on data loss 
+2) calculate the wanted entropy H(y,z), e.g., for binary problem with 3 classifiers
+   should have log 6 = 1.8 bits ideally, set a lower bound of some sort
+3) add in early stopping
+
+   
 
