@@ -3,10 +3,16 @@ linear:
 2) add data generation code to here (synthetic dataset)
 
 nonlinear:
-1) check nan on data loss 
-2) calculate the wanted entropy H(y,z), e.g., for binary problem with 3 classifiers
-   should have log 6 = 1.8 bits ideally, set a lower bound of some sort
-3) add in early stopping
+1) add in early stopping
+2) reduce batch size
 
-   
+observed issues:
+1) once entropy drops, it can not get back because of the expectation in loss function
+   => low entropy sucks
+2) too high entropy is again not good as it forces data loss to not work
+   => high entropy sucks
+3) the switch network should be very not powerful, all power should be given to 
+   weight network (more lines to draw with enough entropy in in switch network)
 
+relevant experiment: triangle_2hidden, triangle_small
+a challenging dataset: square2*

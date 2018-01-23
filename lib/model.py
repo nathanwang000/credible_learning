@@ -11,11 +11,9 @@ class Switch(nn.Module):
     def __init__(self, input_size, switch_size):
         super().__init__()
         self.i2o = nn.Sequential(
-            nn.Linear(input_size, 128),
+            nn.Linear(input_size, 32),
             nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, switch_size),            
+            nn.Linear(32, switch_size),            
         )
         self.logsoftmax = nn.LogSoftmax()
         self.switch_size = switch_size
@@ -35,9 +33,13 @@ class Weight(nn.Module):
         self.i2o = nn.Sequential(
             nn.Linear(switch_size, 128),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 256),
             nn.ReLU(),
-            nn.Linear(128, param_size),            
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 32),
+            nn.ReLU(),            
+            nn.Linear(32, param_size),            
         )
         
     def forward(self, x):

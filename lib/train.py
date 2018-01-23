@@ -9,7 +9,7 @@ import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
 from lib.utility import to_np, to_var, gradNorm, check_nan, fig2data, fig2img
-from lib.utility import to_cuda
+from lib.utility import to_cuda, valueNorm
 from sklearn.metrics import accuracy_score
 from lib.settings import DISCRETE_COLORS
 import matplotlib.pyplot as plt
@@ -143,7 +143,6 @@ class Trainer(object):
             
 class InterpretableTrainer(Trainer):
     def __init__(self, switchNet, weightNet, apply_f,
-                 name="name",
                  lr=0.001,
                  alpha=0.001,
                  beta=0.001,
@@ -167,7 +166,7 @@ class InterpretableTrainer(Trainer):
 
         self.log_dir = 'logs/' + ("" if log_name is None else log_name)
         self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.name = name
+        self.name = "name" if log_name is None else log_name
         self.silence = silence
         self.count = 0
 
@@ -216,7 +215,6 @@ class InterpretableTrainer(Trainer):
         f = self.weightNet(z)
         o = self.apply_f(f, x)
         res = self.elementwise_loss(o, y)
-        # todo: check for nan here
         if const:
             return var2constvar(res) 
         return res
@@ -319,6 +317,7 @@ class InterpretableTrainer(Trainer):
 
             hz = _z_entropy_loss.mean().data[0]
             hyz = _y_entropy_loss.mean().data[0]
+
             self.writer.add_scalar('loss/data', _data_loss.mean().data[0],
                                    self.count)
             self.writer.add_scalar('loss/z_entropy',
@@ -347,23 +346,23 @@ class InterpretableTrainer(Trainer):
             assert np.isfinite(gradNorm(self.switchNet))
         except:
             print('inf gradient switchNet')
+
         try:
             assert np.isfinite(gradNorm(self.weightNet))
         except:
-            print('inf gradient switchNet')
+            print('inf gradient weightNet')
         
         # clip gradient here
-        # clip_grad_norm(self.switchNet.parameters(), self.max_grad)
+        clip_grad_norm(self.switchNet.parameters(), self.max_grad)
         # per parameter clip
-        for p in self.switchNet.parameters():
-            if p.grad is None:
-                continue
-            p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
-
-        for p in self.weightNet.parameters():
-            if p.grad is None:
-                continue
-            p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
+        # for p in self.switchNet.parameters():
+        #     if p.grad is None:
+        #         continue
+        #     p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
+        # for p in self.weightNet.parameters():
+        #     if p.grad is None:
+        #         continue
+        #     p.grad.data = p.grad.data.clamp(-self.max_grad, self.max_grad)
         
         self.optSwitch.step()
         self.optWeight.step()        

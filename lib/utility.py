@@ -12,6 +12,7 @@ from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
 import torch
 from PIL import Image
+from torch.autograd import Function
 
 def to_cuda(x):
     if torch.cuda.is_available():
@@ -159,8 +160,25 @@ def bootstrap(valdata):
 def var2constvar(v):
     return to_var(v.data)
 
-def logit_elementwise_loss(o, y):
-    return torch.log(1 + torch.exp(-y * o))
+class ElementaryLogitLoss(Function):
+
+    @staticmethod
+    def forward(ctx, o, y):
+        ctx.save_for_backward(o, y)
+        a = -y*o
+        res = torch.log(1+torch.exp(-y*o))
+        ind = a > 50
+        res[ind] = a[ind]
+        return res
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        o, y = ctx.saved_variables
+        grad_o = -y / (1 + torch.exp(y*o))
+        grad_y = -o / (1 + torch.exp(y*o))
+        return grad_o * grad_output, grad_y * grad_output
+
+logit_elementwise_loss = ElementaryLogitLoss().apply
 
 def prepareX(x):
     '''
@@ -205,6 +223,11 @@ def gradNorm(model, norm_type=2):
         total_norm += p.grad.data.norm(norm_type)**norm_type
     return total_norm**(1/norm_type)
 
+def valueNorm(model, norm_type=2):
+    total_norm = 0
+    for p in model.parameters():
+        total_norm += p.data.norm(norm_type)**norm_type
+    return total_norm**(1/norm_type)
     
 def fig2data ( fig ):
     """
