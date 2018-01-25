@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 import torch
 from PIL import Image
 from torch.autograd import Function
+from scipy.linalg import block_diag
 
 def to_cuda(x):
     if torch.cuda.is_available():
@@ -258,3 +259,26 @@ def fig2img ( fig ):
     buf = fig2data ( fig )
     w, h, d = buf.shape
     return Image.frombytes( "RGBA", ( w ,h ), buf.tostring( ) )
+
+def reportAcc(model, test_data):
+    accuracy = 0
+    for k, (x, y) in enumerate(test_data):
+        x, y = to_var(x).float(), to_var(y).float()
+        yhat = to_np(model.forward(x) >= 0)
+        yhat = yhat.astype(int)*2-1
+        y = to_np(y)
+        acc = (yhat==y).sum() / y.shape[0]
+        accuracy += 1 / (k+1) * (acc - accuracy)
+    return accuracy
+
+### data generation helpers ###
+### from my code on https://gist.github.com/anonymous/1ba9a828e814bfea6c5df4d97b443ade
+def genCovX(C, n): # helper function to create N(0, C)
+    ''' C is the covariance matrice (assume to be psd)
+    n is number of examples'''
+    A = np.linalg.cholesky(C)
+    d, _ = C.shape
+    Z = np.random.randn(n, d)
+    X = Z.dot(A.T)
+    return X.astype(np.float32)
+

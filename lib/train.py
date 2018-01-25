@@ -9,7 +9,7 @@ import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
 from lib.utility import to_np, to_var, gradNorm, check_nan, fig2data, fig2img
-from lib.utility import to_cuda, valueNorm
+from lib.utility import to_cuda, valueNorm, reportAcc
 from sklearn.metrics import accuracy_score
 from lib.settings import DISCRETE_COLORS
 import matplotlib.pyplot as plt
@@ -368,7 +368,7 @@ class InterpretableTrainer(Trainer):
         self.optWeight.step()        
         return yhat, regret.data[0]
 
-    def fit(self, data, batch_size=100, n_epochs=10, print_every=10):
+    def fit(self, data, batch_size=100, n_epochs=10, print_every=10, valdata=None):
         '''
         fit a model to x, y data by batch
         print_every is 0 if do not wish to print
@@ -406,7 +406,10 @@ class InterpretableTrainer(Trainer):
                                'nonlinear_models/%s^weight.pt' % self.name)
                     np.save('nonlinear_models/%s.loss' % self.name, losses)
 
-
+                    if valdata is not None:
+                        self.writer.add_scalar('data/val_acc', reportAcc(self,valdata),
+                                               self.count)
+                        
                     self.writer.add_scalar('switch/grad_norm', gradNorm(self.switchNet),
                                            self.count)
                     self.writer.add_scalar('weight/grad_norm', gradNorm(self.weightNet),
@@ -432,6 +435,7 @@ class InterpretableTrainer(Trainer):
         '''
         inrange: if true fix y axis from ymin to ymax
         '''
+        if x.data.shape[1]  > 2: return
         
         plt.figure(figsize=(10,10))
         _ = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax,
