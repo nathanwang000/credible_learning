@@ -8,19 +8,33 @@ from lib.utility import to_np, to_var, check_nan
 ###### non linear credibility start #############
 # softmax version
 class Switch(nn.Module):
-    def __init__(self, input_size, switch_size):
+    def __init__(self, input_size, switch_size, mtl=False):
+        '''
+        mtl: is multi-task-learning or not
+             if yes, assume the last dimension is task number
+        '''
         super().__init__()
         self.i2o = nn.Sequential(
-            nn.Linear(input_size, 128),
+            nn.Linear(input_size, 32),
             nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, switch_size),            
+            nn.Linear(32, switch_size),            
         )
         self.logsoftmax = nn.LogSoftmax()
         self.switch_size = switch_size
+        self.mtl = mtl
+        self.input_size = input_size
         
     def forward(self, x):
+        if self.mtl: # the last one is task number
+            x = x[:,-1:]
+            m, d = x.size()
+            # turn into onehot
+            if self.input_size > 1:
+                x_onehot = torch.FloatTensor(m, self.input_size)
+                x_onehot.zero_()
+                x_onehot.scatter_(1, x.cpu().data.long(), 1)
+                x = to_var(x_onehot)
+
         o = self.i2o(x)
         # assert not check_nan(o)
         return self.logsoftmax(o)
@@ -33,11 +47,18 @@ class Weight(nn.Module):
         super().__init__()
         self.switch_size = switch_size
         self.i2o = nn.Sequential(
-            nn.Linear(switch_size, 128),
+            nn.Linear(switch_size, 32),
             nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, param_size),            
+            nn.Linear(32, param_size), 
+            # nn.Linear(switch_size, 128),
+            # nn.ReLU(),
+            # nn.Linear(128, 256),
+            # nn.ReLU(),
+            # nn.Linear(256, 128),
+            # nn.ReLU(),
+            # nn.Linear(128, 32),
+            # nn.ReLU(),            
+            # nn.Linear(32, param_size),            
         )
         
     def forward(self, x):
@@ -54,6 +75,30 @@ class Weight(nn.Module):
 
 def apply_linear(f, x): # for linear model
     return (f[:,:-1] * x).sum(1) + f[:,-1]    
+
+class WeightIndependent(nn.Module):
+    def __init__(self, switch_size, param_size):
+        '''
+        param_size: number of parameters for the interpretable model
+        independent switch_size number of lines
+        '''
+        super().__init__()
+        self.switch_size = switch_size
+        self.classifiers = []
+        for i in range(switch_size):
+            self.classifiers.append(nn.Linear(param_size, 1))
+        
+    def forward(self, x):
+        return self.i2o(x)
+
+    def explain(self):
+        explanations = []
+        for i in range(self.switch_size):
+            x = np.zeros(self.switch_size)
+            x[i] = 1
+            x = to_var(torch.from_numpy(x)).float()
+            explanations.append(list(to_np(self.forward(x))))
+        return explanations
 
 ###### non linear credibility end ###############
 

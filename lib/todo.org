@@ -2,4 +2,17 @@ linear:
 1) add Cdiff environment to this codebase
 2) add data generation code to here (synthetic dataset)
 
+nonlinear:
+1) add in early stopping
+2) reduce batch size
 
+observed issues:
+1) once entropy drops, it can not get back because of the expectation in loss function
+   => low entropy sucks
+2) too high entropy is again not good as it forces data loss to not work
+   => high entropy sucks
+3) the switch network should be very not powerful, all power should be given to 
+   weight network (more lines to draw with enough entropy in in switch network)
+
+relevant experiment: triangle_2hidden, triangle_small
+a challenging dataset: square2*

@@ -11,13 +11,20 @@ import seaborn as sns
 from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
 import torch
+from PIL import Image
+from torch.autograd import Function
+from scipy.linalg import block_diag
+
+def to_cuda(x):
+    if torch.cuda.is_available():
+        x = x.cuda()
+    return x
 
 def to_np(x):
     return x.data.cpu().numpy()
 
 def to_var(x, *args, **kwargs):
-    if torch.cuda.is_available():
-        x = x.cuda()
+    x = to_cuda(x)
     return Variable(x, *args, **kwargs)   
 
 def check_nan(v):
@@ -154,8 +161,25 @@ def bootstrap(valdata):
 def var2constvar(v):
     return to_var(v.data)
 
-def logit_elementwise_loss(o, y):
-    return torch.log(1 + torch.exp(-y * o))
+class ElementaryLogitLoss(Function):
+
+    @staticmethod
+    def forward(ctx, o, y):
+        ctx.save_for_backward(o, y)
+        a = -y*o
+        res = torch.log(1+torch.exp(-y*o))
+        ind = a > 50
+        res[ind] = a[ind]
+        return res
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        o, y = ctx.saved_variables
+        grad_o = -y / (1 + torch.exp(y*o))
+        grad_y = -o / (1 + torch.exp(y*o))
+        return grad_o * grad_output, grad_y * grad_output
+
+logit_elementwise_loss = ElementaryLogitLoss().apply
 
 def prepareX(x):
     '''
@@ -189,7 +213,7 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
     else:
         colors = Z
     
-    plt.scatter(xx.ravel(), yy.ravel(), c=colors)        
+    plt.scatter(xx.ravel(), yy.ravel(), c=colors, s=50)        
     return model_input
 
 def gradNorm(model, norm_type=2):
@@ -200,4 +224,61 @@ def gradNorm(model, norm_type=2):
         total_norm += p.grad.data.norm(norm_type)**norm_type
     return total_norm**(1/norm_type)
 
+def valueNorm(model, norm_type=2):
+    total_norm = 0
+    for p in model.parameters():
+        total_norm += p.data.norm(norm_type)**norm_type
+    return total_norm**(1/norm_type)
     
+def fig2data ( fig ):
+    """
+    @brief Convert a Matplotlib figure to a 4D numpy array with RGBA channels and return it
+    @param fig a matplotlib figure
+    @return a numpy 3D array of RGBA values
+    """
+    # draw the renderer
+    fig.canvas.draw ( )
+    
+    # Get the RGBA buffer from the figure
+    w,h = fig.canvas.get_width_height()
+    buf = np.fromstring ( fig.canvas.tostring_argb(), dtype=np.uint8 )
+    buf.shape = ( w, h, 4 )
+    
+    # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
+    buf = np.roll ( buf, 3, axis = 2 )
+    return buf
+
+
+def fig2img ( fig ):
+    """
+    @brief Convert a Matplotlib figure to a PIL Image in RGBA format and return it
+    @param fig a matplotlib figure
+    @return a Python Imaging Library ( PIL ) image
+    """
+    # put the figure pixmap into a numpy array
+    buf = fig2data ( fig )
+    w, h, d = buf.shape
+    return Image.frombytes( "RGBA", ( w ,h ), buf.tostring( ) )
+
+def reportAcc(model, test_data):
+    accuracy = 0
+    for k, (x, y) in enumerate(test_data):
+        x, y = to_var(x).float(), to_var(y).float()
+        yhat = to_np(model.forward(x) >= 0)
+        yhat = yhat.astype(int)*2-1
+        y = to_np(y)
+        acc = (yhat==y).sum() / y.shape[0]
+        accuracy += 1 / (k+1) * (acc - accuracy)
+    return accuracy
+
+### data generation helpers ###
+### from my code on https://gist.github.com/anonymous/1ba9a828e814bfea6c5df4d97b443ade
+def genCovX(C, n): # helper function to create N(0, C)
+    ''' C is the covariance matrice (assume to be psd)
+    n is number of examples'''
+    A = np.linalg.cholesky(C)
+    d, _ = C.shape
+    Z = np.random.randn(n, d)
+    X = Z.dot(A.T)
+    return X.astype(np.float32)
+
