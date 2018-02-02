@@ -13,6 +13,11 @@ observed issues:
    => high entropy sucks
 3) the switch network should be very not powerful, all power should be given to 
    weight network (more lines to draw with enough entropy in in switch network)
+4) independent weight network needs much different learning rate!
 
 relevant experiment: triangle_2hidden, triangle_small
 a challenging dataset: square2*
+
+multitask learning:
+1. get independent task running
+2. get baselines running

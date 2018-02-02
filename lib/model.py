@@ -1,9 +1,9 @@
-import torch
+import torch, math
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
-from lib.utility import to_np, to_var, check_nan
+from lib.utility import to_np, to_var, check_nan, to_cuda, onehotize
 
 ###### non linear credibility start #############
 # softmax version
@@ -12,31 +12,32 @@ class Switch(nn.Module):
         '''
         mtl: is multi-task-learning or not
              if yes, assume the last dimension is task number
+        input_size: if mtl, input_size is number of tasks
         '''
+        hidden_size = max(32, input_size)        
         super().__init__()
         self.i2o = nn.Sequential(
-            nn.Linear(input_size, 32),
-            nn.ReLU(),
-            nn.Linear(32, switch_size),            
+            nn.Linear(input_size, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, switch_size),
+            # nn.Linear(input_size, switch_size)
         )
-        self.logsoftmax = nn.LogSoftmax()
+        self.logsoftmax = nn.LogSoftmax(dim=1)
         self.switch_size = switch_size
         self.mtl = mtl
         self.input_size = input_size
         
     def forward(self, x):
         if self.mtl: # the last one is task number
-            x = x[:,-1:]
-            m, d = x.size()
-            # turn into onehot
-            if self.input_size > 1:
-                x_onehot = torch.FloatTensor(m, self.input_size)
-                x_onehot.zero_()
-                x_onehot.scatter_(1, x.cpu().data.long(), 1)
-                x = to_var(x_onehot)
+            if len(x.size()) == 1:
+                t = np.zeros(self.input_size)
+                t[int(to_np(x[-1])[0])] = 1
+                x = to_var(torch.from_numpy(t).float())
+            else:
+                x = x[:,-1:]                
+                x = onehotize(x, self.input_size)                
 
         o = self.i2o(x)
-        # assert not check_nan(o)
         return self.logsoftmax(o)
 
 class Weight(nn.Module):
@@ -47,18 +48,18 @@ class Weight(nn.Module):
         super().__init__()
         self.switch_size = switch_size
         self.i2o = nn.Sequential(
-            nn.Linear(switch_size, 32),
+            # nn.Linear(switch_size, 32),
+            # nn.ReLU(),
+            # nn.Linear(32, param_size), 
+            nn.Linear(switch_size, 128),
             nn.ReLU(),
-            nn.Linear(32, param_size), 
-            # nn.Linear(switch_size, 128),
-            # nn.ReLU(),
-            # nn.Linear(128, 256),
-            # nn.ReLU(),
-            # nn.Linear(256, 128),
-            # nn.ReLU(),
-            # nn.Linear(128, 32),
-            # nn.ReLU(),            
-            # nn.Linear(32, param_size),            
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 32),
+            nn.ReLU(),            
+            nn.Linear(32, param_size),            
         )
         
     def forward(self, x):
@@ -71,33 +72,74 @@ class Weight(nn.Module):
             x[i] = 1
             x = to_var(torch.from_numpy(x)).float()
             explanations.append(list(to_np(self.forward(x))))
+        # print(explanations)
         return explanations
 
 def apply_linear(f, x): # for linear model
     return (f[:,:-1] * x).sum(1) + f[:,-1]    
 
+class SwitchIndependent(nn.Module):
+    def __init__(self, input_size, switch_size, mtl=False):
+        '''
+        mtl: is multi-task-learning or not
+             if yes, assume the last dimension is task number
+        input_size: if mtl, input_size is number of tasks
+        '''
+        super().__init__()
+        self.i2o = nn.Sequential(
+            nn.Linear(input_size, switch_size),
+        )
+        self.logsoftmax = nn.LogSoftmax()
+        self.switch_size = switch_size
+        self.mtl = mtl
+        self.input_size = input_size
+        
+    def forward(self, x):
+        if self.mtl: # the last one is task number
+            if len(x.size()) == 1:
+                t = np.zeros(self.input_size)
+                t[int(to_np(x[-1])[0])] = 1
+                x = to_var(torch.from_numpy(t).float())
+            else:
+                x = x[:,-1:]                
+                x = onehotize(x, self.input_size)                
+
+        o = self.i2o(x)
+        return self.logsoftmax(o)
+
 class WeightIndependent(nn.Module):
+
     def __init__(self, switch_size, param_size):
         '''
         param_size: number of parameters for the interpretable model
         independent switch_size number of lines
         '''
         super().__init__()
-        self.switch_size = switch_size
-        self.classifiers = []
-        for i in range(switch_size):
-            self.classifiers.append(nn.Linear(param_size, 1))
+        self.K = switch_size
+        self.D = param_size
+        self.W = torch.randn(self.K, self.D)
+        # self.W = torch.FloatTensor([[-1,-1,0]])
+        self.W = nn.Parameter(self.W)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.W.size(1))
+        self.W.data.uniform_(-stdv, stdv)
         
-    def forward(self, x):
-        return self.i2o(x)
+    def forward(self, z):
+        if len(z.size()) == 1:
+            z = z.unsqueeze(0)
+            return torch.mm(z, self.W)[0]
+        return torch.mm(z, self.W)
 
     def explain(self):
         explanations = []
-        for i in range(self.switch_size):
-            x = np.zeros(self.switch_size)
+        for i in range(self.K):
+            x = np.zeros(self.K)
             x[i] = 1
             x = to_var(torch.from_numpy(x)).float()
             explanations.append(list(to_np(self.forward(x))))
+        # print(explanations)
         return explanations
 
 ###### non linear credibility end ###############

@@ -6,14 +6,13 @@ from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.metrics import average_precision_score, confusion_matrix
 import numpy as np
 import time
-import matplotlib.pyplot as plt
-import seaborn as sns
 from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
 import torch
 from PIL import Image
 from torch.autograd import Function
 from scipy.linalg import block_diag
+import os
 
 def to_cuda(x):
     if torch.cuda.is_available():
@@ -57,7 +56,7 @@ def model_auc(model, data):
     for x, y in data:
         ys.append(y.numpy())
         x, y = to_var(x), to_var(y)
-        yhat.append(model(x).data.numpy())
+        yhat.append(to_np(model(x)))
     y, yhat = np.hstack(ys), np.vstack(yhat)[:,1]
     return roc_auc_score(y, yhat)    
 
@@ -67,7 +66,7 @@ def model_acc(model, data):
     for x, y in data:
         ys.append(y.numpy())
         x, y = to_var(x), to_var(y)
-        yhat.append(np.argmax(model(x).data.numpy(), 1))
+        yhat.append(np.argmax(to_np(model(x)), 1))
     y, yhat = np.hstack(ys), np.vstack(yhat)
 
     return accuracy_score(y, yhat)
@@ -87,6 +86,9 @@ def calcAP(ytrue, ypred):
     return average_precision_score(ytrue, np.abs(ypred))
     
 def plotAUC(m, model, valdata):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
     # m is a dataset in data.py
     y_test, y_score = get_y_yhat(model, valdata)
     y_score = y_score[:, 1]
@@ -138,6 +140,9 @@ def sweepS1(model, valdata, plot=False, mode='s1'):
     t = thresholds[max_ind]
 
     if plot:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
         plt.plot(thresholds, scores, color='green', lw=2)
         plt.xlabel('threshold')
         plt.ylabel('score1 (min(sensitivity, precision))')
@@ -193,6 +198,9 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
     plot decision surface of a pytorch model
     assumes model output likelihood
     '''
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
     xx, yy = np.meshgrid(np.linspace(xmin, xmax, nsteps),
                          np.linspace(ymin, ymax, nsteps))
     # note here assumes model gives log likelihood
@@ -209,7 +217,7 @@ def plotDecisionSurface(model, xmin, xmax, ymin, ymax, nsteps=30,
         Z = (Z > 0).astype(np.int)
 
     if colors:
-        colors = list(map(lambda i: colors[int(i)], Z))
+        colors = list(map(lambda i: colors[int(i) % len(colors)], Z))
     else:
         colors = Z
     
@@ -270,6 +278,16 @@ def reportAcc(model, test_data):
         acc = (yhat==y).sum() / y.shape[0]
         accuracy += 1 / (k+1) * (acc - accuracy)
     return accuracy
+
+def onehotize(z, ntasks):
+    '''
+    z is n x 1 long tensor variable
+    '''
+    m, d = z.size()
+    x_onehot = to_cuda(torch.FloatTensor(m, ntasks))
+    x_onehot.zero_()
+    x_onehot.scatter_(1, z.data.long(), 1)
+    return to_var(x_onehot)
 
 ### data generation helpers ###
 ### from my code on https://gist.github.com/anonymous/1ba9a828e814bfea6c5df4d97b443ade
