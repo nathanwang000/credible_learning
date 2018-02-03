@@ -6,7 +6,6 @@ import numpy as np
 from lib.utility import to_np, to_var, check_nan, to_cuda, onehotize
 
 ###### non linear credibility start #############
-# softmax version
 class Switch(nn.Module):
     def __init__(self, input_size, switch_size, mtl=False):
         '''
@@ -14,13 +13,13 @@ class Switch(nn.Module):
              if yes, assume the last dimension is task number
         input_size: if mtl, input_size is number of tasks
         '''
+        super().__init__()        
         hidden_size = max(32, input_size)        
-        super().__init__()
+
         self.i2o = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.Tanh(),
             nn.Linear(hidden_size, switch_size),
-            # nn.Linear(input_size, switch_size)
         )
         self.logsoftmax = nn.LogSoftmax(dim=1)
         self.switch_size = switch_size
@@ -40,6 +39,24 @@ class Switch(nn.Module):
         o = self.i2o(x)
         return self.logsoftmax(o)
 
+class AutoEncoder(nn.Module):
+    def __init__(self, d, h):
+        super().__init__()                
+        # from dimension d to h then back to d
+        self.encode = nn.Sequential(
+            nn.Linear(d, h),
+            nn.Sigmoid(),
+        )
+        self.decode = nn.Sequential(
+            nn.Linear(h, d)
+        )
+
+    def forward(self, x):
+        return self.decode(self.encode(x))
+
+    def embed(self, x):
+        return self.encode(x)
+
 class Weight(nn.Module):
     def __init__(self, switch_size, param_size):
         '''
@@ -48,9 +65,6 @@ class Weight(nn.Module):
         super().__init__()
         self.switch_size = switch_size
         self.i2o = nn.Sequential(
-            # nn.Linear(switch_size, 32),
-            # nn.ReLU(),
-            # nn.Linear(32, param_size), 
             nn.Linear(switch_size, 128),
             nn.ReLU(),
             nn.Linear(128, 256),
@@ -78,6 +92,29 @@ class Weight(nn.Module):
 def apply_linear(f, x): # for linear model
     return (f[:,:-1] * x).sum(1) + f[:,-1]    
 
+class MLP(nn.Module): # assume output 1 element for logit loss
+    def __init__(self, d):
+        '''
+        d: input dimension
+        '''
+        super().__init__()
+        self.i2o = nn.Sequential(
+            nn.Linear(d, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 32),
+            nn.ReLU(),            
+            nn.Linear(32, 1),            
+        )
+        
+    def forward(self, x):
+        return self.i2o(x)
+
+###### non linear credibility end ###############
+# the following two are for multi task learning setup, not used here
 class SwitchIndependent(nn.Module):
     def __init__(self, input_size, switch_size, mtl=False):
         '''
@@ -142,7 +179,6 @@ class WeightIndependent(nn.Module):
         # print(explanations)
         return explanations
 
-###### non linear credibility end ###############
 
 class LR(nn.Module): # logistic regression with 2 neurons
     def __init__(self, input_size, output_size):
@@ -158,7 +194,7 @@ class LR(nn.Module): # logistic regression with 2 neurons
         output = self.softmax(self.i2o(input))
         return output
 
-class MLP(nn.Module):
+class MLP_general(nn.Module):
     # so this essentially shares weights for each layer, may not be what  I want
     def __init__(self, input_size, hidden_size, output_size, numlayers=5):
         super(MLP, self).__init__()

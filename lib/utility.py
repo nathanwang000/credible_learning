@@ -9,6 +9,7 @@ import time
 from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
 import torch
+from torch import nn
 from PIL import Image
 from torch.autograd import Function
 from scipy.linalg import block_diag
@@ -272,12 +273,26 @@ def reportAcc(model, test_data):
     accuracy = 0
     for k, (x, y) in enumerate(test_data):
         x, y = to_var(x).float(), to_var(y).float()
-        yhat = to_np(model.forward(x) >= 0)
+        yhat = to_np(model.forward(x) >= 0).ravel()
         yhat = yhat.astype(int)*2-1
         y = to_np(y)
         acc = (yhat==y).sum() / y.shape[0]
         accuracy += 1 / (k+1) * (acc - accuracy)
     return accuracy
+
+def reportMSE(model, test_data, is_autoencoder=False):
+    f = nn.MSELoss()
+    mse_cum = 0
+    for k, (x, y) in enumerate(test_data):
+        x, y = to_var(x).float(), to_var(y).float()
+        yhat = model.forward(x)
+        if is_autoencoder:
+            mse = f(yhat, x)
+        else:
+            mse = f(yhat, y)
+        mse_cum += 1 / (k+1) * (mse - mse_cum)
+    return float(to_np(mse_cum)[0])
+
 
 def onehotize(z, ntasks):
     '''
@@ -288,6 +303,14 @@ def onehotize(z, ntasks):
     x_onehot.zero_()
     x_onehot.scatter_(1, z.data.long(), 1)
     return to_var(x_onehot)
+
+def chain_functions(funcs):
+    # chain functions together
+    def ret(x):
+        for f in funcs:
+            x = f(x)
+        return x
+    return ret
 
 ### data generation helpers ###
 ### from my code on https://gist.github.com/anonymous/1ba9a828e814bfea6c5df4d97b443ade

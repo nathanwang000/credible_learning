@@ -3,13 +3,13 @@ import sys
 import torch
 from torch import nn
 from torch.autograd import Variable
-from lib.model import LR
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, DataLoader, TensorDataset
 import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
+from lib.utility import onehotize
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
 from lib.utility import to_np, to_var, gradNorm, check_nan, fig2data, fig2img
-from lib.utility import to_cuda, valueNorm, reportAcc
+from lib.utility import to_cuda, valueNorm, reportAcc, reportMSE, chain_functions
 from sklearn.metrics import accuracy_score
 from lib.settings import DISCRETE_COLORS
 from tensorboardX import SummaryWriter
@@ -18,6 +18,7 @@ from torchvision.transforms import ToTensor
 from time import gmtime, strftime
 from torch.distributions import Categorical
 import os
+from sklearn.cluster import KMeans, SpectralClustering
 
 def np2tensor(x, y):
     return torch.from_numpy(x).float(), torch.from_numpy(y).long()
@@ -42,7 +43,7 @@ class Trainer(object):
         self.model = model
         to_cuda(model)
         if optimizer is None:
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)   
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)   
         self.optimizer = optimizer
         if loss is None:
             loss = nn.NLLLoss()
@@ -154,7 +155,7 @@ class InterpretableTrainer(Trainer):
                  silence=True,
                  mtl=False,
                  max_time=30,
-                 n_early_stopping=30,
+                 n_early_stopping=50,
                  print_every=100,
                  plot=True):
         '''
@@ -278,6 +279,7 @@ class InterpretableTrainer(Trainer):
         weight_cost = 0
 
         if sample:
+            raise NotImplementedError
             for i in range(n_samples):
                 z = samplez
 
@@ -315,7 +317,6 @@ class InterpretableTrainer(Trainer):
             weight_cost /= n_samples
             weight_cost.mean().backward()
         else:
-            _data_loss = 0
             _z_entropy_loss = 0
             _y_entropy_loss = 0
             
@@ -354,7 +355,6 @@ class InterpretableTrainer(Trainer):
                 weight_cost += p_z_x[:, i] * data_loss
 
                 # collect statistics: +1 for transform derivative back to entropy
-                _data_loss += p_z_x[:, i] * data_loss
                 _z_entropy_loss += p_z_x[:, i] * (z_entropy_loss + 1)
                 _y_entropy_loss += p_z_x[:, i] * y_entropy_loss 
 
@@ -366,8 +366,6 @@ class InterpretableTrainer(Trainer):
                 hz = _z_entropy_loss.mean().data[0]
                 hyz = _y_entropy_loss.mean().data[0]
                 
-                self.writer.add_scalar('loss/data', _data_loss.mean().data[0],
-                                       self.count)
                 self.writer.add_scalar('loss/z_entropy',
                                        hz,
                                        self.count)
@@ -419,8 +417,6 @@ class InterpretableTrainer(Trainer):
     def fit(self, data, batch_size=100, n_epochs=10, valdata=None, test_theta=None):
         '''
         fit a model to x, y data by batch
-        print_every is 0 if do not wish to print
-
         test_theta: for recovering heterogeneous subpopulation
         '''
         time_start = time.time()
@@ -628,38 +624,428 @@ class InterpretableTrainer(Trainer):
             plt.show()
 
 class AutoEncoderTrainer(object):
-    def __init__(self, autoencoder, data):
-        pass
+    def __init__(self, autoencoder, lr=0.001, print_every=100,
+                 log_name=None, max_time=30, n_early_stopping=50):
+        '''
+        print_every is 0 if do not wish to print
+        '''
+        self.transform_function = lambda x: x # identity, for combined trainer
+        
+        self.autoencoder = to_cuda(autoencoder)
+        self.optimizer = torch.optim.Adam(self.autoencoder.parameters(), lr=lr)
+        self.max_time = max_time
+        self.n_early_stopping = n_early_stopping
+        self.loss = nn.MSELoss() # l2 loss
+        self.print_every = print_every
+        self.setLogName(log_name)
+        
+    def setLogName(self, log_name):
+        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
+        log_name = "" if log_name is None else log_name
+        self.log_dir = 'logs/' + os.path.join(log_name, comment)
+        self.writer = SummaryWriter(log_dir=self.log_dir)
+        self.name = "name" if log_name is None else log_name        
+        self.count = 0
+        
+    def forward(self, x):
+        x = self.transform_function(x)
+        return self.autoencoder(x)
+    
+    def step(self, x, y):
+        '''
+        one step of training
+        return yhat, regret
+        '''
+        self.optimizer.zero_grad()
+        yhat = self.forward(x)
+        regret = self.loss(yhat, x) # here autoencoder want to compare to x
+        regret.backward()
+        self.optimizer.step()
+        return yhat, regret.data[0]
 
-    def fit(self):
-        pass
+    def fit(self, data, batch_size=100, n_epochs=10,
+            valdata=None, test_theta=None):
+        '''
+        fit a model to x, y data by batch
+        test_theta: for recovering heterogeneous subpopulation
+        '''
+        time_start = time.time()
+        losses = []
+        vallosses = [1000]
+        best_valloss, best_valindex = 1000, 0 # for early stopping
+        n = len(data.dataset)
+        cost = 0
+        self.count = 0
+        
+        for epoch in range(n_epochs):
+
+            for k, (x_batch, y_batch) in enumerate(data):
+
+                x_batch, y_batch = to_var(x_batch).float(), to_var(y_batch).float()
+                y_hat, regret = self.step(x_batch, y_batch)
+                m = x_batch.size(0)                
+                cost += 1 / (k+1) * (regret - cost)
+
+                if self.print_every != 0 and self.count % self.print_every == 0:
+
+                    losses.append(cost)
+                    
+                    # progress, time, avg loss, auc
+                    duration = timeSince(time_start)
+                    if int(duration.split('m')[0]) >= self.max_time:
+                        return losses
+                    
+                    to_print = ('%.2f%% (%s) %.4f' % ((epoch * n + (k+1) * m) /
+                                                      (n_epochs * n) * 100,
+                                                      duration,
+                                                      cost))
+                    
+                    print(to_print)
+
+                    if valdata is not None:
+                        _mse = reportMSE(self,valdata,is_autoencoder=True)
+                        valloss = _mse
+                        vallosses.append(valloss)
+                        if valloss < best_valloss:
+                            best_valloss = valloss
+                            best_valindex = len(vallosses) - 1
+                            torch.save(self.autoencoder,
+                                       'nonlinear_models/%s.pt' % self.name)
+                            np.save('nonlinear_models/%s.loss' % self.name, losses)
+                            
+                        if len(vallosses) - best_valindex > self.n_early_stopping:
+                            print('early stop at iteration', self.count)
+                            return losses                            
+
+                        # self.writer.add_scalar('data/train_loss', cost, self.count)
+                        self.writer.add_scalar('data/val_mse', _mse, self.count)
+
+                        
+                    self.writer.add_scalar('model/grad_norm', gradNorm(self.autoencoder),
+                                           self.count)
+                    self.writer.add_scalar('data/train_loss', cost, self.count)
+                    
+                    cost = 0
+                    
+                self.count += 1
+
+        return losses
+
+    def transform(self, x):
+        '''
+        turn input into usable form for next model, here is just the encoded content
+        '''
+        return self.autoencoder.embed(x)
 
 class KmeansTrainer(object):
-    def __init__(self, use_spectral=True, k=5):
-        pass
+    def __init__(self, k, use_spectral=False):
+        '''
+        k: number of clusters
+        '''
+        self.k = k
+        self.transform_function = lambda x: x # used in combined trainer
+        if use_spectral:
+            self.clf = SpectralClustering(n_clusters=k)
+        else:
+            self.clf = KMeans(n_clusters=k)
 
-    def fit(self, data):
-        pass
+    def fit(self, data, **kwargs):
+        x, y = data.dataset[:] # x is the original input, not necessarily kmeans input
+        x = to_var(x)
+        x = self.transform_function(x)
+
+        x = to_np(x)
+        self.clf.fit(x)
+
+    def transform(self, x):
+        '''
+        x is a pytorch Variable tensor, this works for combine
+        x is the output of previous trainer.transform
+        '''
+        x = to_np(x)
+        clusters = self.clf.predict(x)
+        clusters = onehotize(to_var(torch.from_numpy(clusters)).view(-1, 1), self.k)
+        return clusters
+
+    def setLogName(self, logname):
+        self.log_name = logname
     
-class WeightNetTrainer(object):
-    def __init__(self, weightNet):
-        pass
+class WeightNetTrainer(InterpretableTrainer):
+    def __init__(self, weightNet, apply_f, lr=0.001, print_every=100,
+                 log_name=None, max_time=30, n_early_stopping=50):
 
-    def fit(self, data):
-        pass
+        '''
+        print_every is 0 if do not wish to print
+        '''
+        self.transform_function = lambda x: x # identity, for combined trainer
+        
+        self.weightNet = to_cuda(weightNet)
+        self.apply_f = apply_f
+        self.optimizer = torch.optim.Adam(self.weightNet.parameters(), lr=lr)
+        self.max_time = max_time
+        self.n_early_stopping = n_early_stopping
+        self.loss = nn.SoftMarginLoss() # logit loss
+        self.print_every = print_every
+        self.setLogName(log_name)
 
-# todo: and also Trainer, all trainers should use early stopping!
-class AddTrainers(object):
-    def __init__(self):
+    def setLogName(self, log_name):
+        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
+        log_name = "" if log_name is None else log_name
+        self.log_dir = 'logs/' + os.path.join(log_name, comment)
+        self.writer = SummaryWriter(log_dir=self.log_dir)
+        self.name = "name" if log_name is None else log_name        
+        self.count = 0
+        
+    def explain(self, x):
+        x = to_var(x.data).float()        
+        z = self.transform_function(x)   # this is for combined trainer
+        f = self.weightNet(z)
+        return f
+
+    def forward(self, x):
+        f = self.explain(x)
+        o = self.apply_f(f, x) 
+        return o
+    
+    def step(self, x, y):
+        '''
+        one step of training
+        return yhat, regret
+        '''
+        self.optimizer.zero_grad()
+        yhat = self.forward(x)
+        regret = self.loss(yhat, y)
+        regret.backward()
+        self.optimizer.step()
+        return yhat, regret.data[0]
+
+    def fit(self, data, batch_size=100, n_epochs=10,
+            valdata=None, test_theta=None):
+        '''
+        fit a model to x, y data by batch
+        test_theta: for recovering heterogeneous subpopulation
+        '''
+        time_start = time.time()
+        losses = []
+        vallosses = [1000]
+        best_valloss, best_valindex = 1000, 0 # for early stopping
+        n = len(data.dataset)
+        cost = 0
+        self.count = 0
+        
+        for epoch in range(n_epochs):
+
+            for k, (x_batch, y_batch) in enumerate(data):
+
+                x_batch, y_batch = to_var(x_batch).float(), to_var(y_batch).float()
+                y_hat, regret = self.step(x_batch, y_batch)
+                m = x_batch.size(0)                
+                cost += 1 / (k+1) * (regret - cost)
+
+                if self.print_every != 0 and self.count % self.print_every == 0:
+
+                    losses.append(cost)
+                    
+                    # progress, time, avg loss, auc
+                    duration = timeSince(time_start)
+                    if int(duration.split('m')[0]) >= self.max_time:
+                        return losses
+                    
+                    to_print = ('%.2f%% (%s) %.4f' % ((epoch * n + (k+1) * m) /
+                                                      (n_epochs * n) * 100,
+                                                      duration,
+                                                      cost))
+                    
+                    print(to_print)
+                    # if self.draw_plot:
+                    #     self.plotMTL()
+                    #     self.plot(x_batch, y_batch, silence=self.silence, inrange=True)
+
+                    if valdata is not None:
+                        acc = reportAcc(self,valdata)
+                        valloss = -acc
+                        vallosses.append(valloss)
+                        if valloss < best_valloss:
+                            best_valloss = valloss
+                            best_valindex = len(vallosses) - 1
+                            torch.save(self.weightNet,
+                                       'nonlinear_models/%s^weight.pt' % self.name)
+                            np.save('nonlinear_models/%s.loss' % self.name, losses)
+                            
+                        if len(vallosses) - best_valindex > self.n_early_stopping:
+                            print('early stop at iteration', self.count)
+                            return losses                            
+                        
+                        self.writer.add_scalar('data/val_acc', acc,
+                                               self.count)
+                        if test_theta is not None:
+                            sim = self.evaluate_subpopulation(test_theta, valdata)
+                            self.writer.add_scalar('data/subpopulation_cosine',
+                                                   sim, self.count)
+
+                    self.writer.add_scalar('weight/grad_norm', gradNorm(self.weightNet),
+                                           self.count)
+                    self.writer.add_scalar('data/train_loss', cost, self.count)
+                    
+                    # for tag, value in self.weightNet.named_parameters():
+                    #     tag = tag.replace('.', '/')
+                    #     self.writer.add_histogram(tag, to_np(value), self.count)
+                    #     if value.grad is not None:
+                    #         self.writer.add_histogram(tag+'/grad', to_np(value.grad),
+                    #                                   self.count)
+                    cost = 0
+                    
+                self.count += 1
+
+        # if self.draw_plot:
+        #     self.plot(x_batch, y_batch, inrange=True, silence=self.silence)
+
+        return losses
+
+    def transform(self, x):
+        return self.weightNet(x)
+
+
+class MLPTrainer(object):
+    def __init__(self, model, lr=0.001, print_every=100,
+                 log_name=None, max_time=30, n_early_stopping=50):
+
+        '''
+        print_every is 0 if do not wish to print
+        '''
+        self.transform_function = lambda x: x # identity, for combined trainer
+        
+        self.model = to_cuda(model)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.max_time = max_time
+        self.n_early_stopping = n_early_stopping
+        self.loss = nn.SoftMarginLoss() # logit loss
+        self.print_every = print_every
+        self.setLogName(log_name)
+
+    def setLogName(self, log_name):
+        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
+        log_name = "" if log_name is None else log_name
+        self.log_dir = 'logs/' + os.path.join(log_name, comment)
+        self.writer = SummaryWriter(log_dir=self.log_dir)
+        self.name = "name" if log_name is None else log_name        
+        self.count = 0
+        
+    def forward(self, x):
+        x = self.transform_function(x)
+        return self.model(x)
+    
+    def step(self, x, y):
+        '''
+        one step of training
+        return yhat, regret
+        '''
+        self.optimizer.zero_grad()
+        yhat = self.forward(x)
+        regret = self.loss(yhat, y)
+        regret.backward()
+        self.optimizer.step()
+        return yhat, regret.data[0]
+
+    def fit(self, data, batch_size=100, n_epochs=10,
+            valdata=None, test_theta=None):
+        '''
+        fit a model to x, y data by batch
+        test_theta: for recovering heterogeneous subpopulation
+        '''
+        time_start = time.time()
+        losses = []
+        vallosses = [1000]
+        best_valloss, best_valindex = 1000, 0 # for early stopping
+        n = len(data.dataset)
+        cost = 0
+        self.count = 0
+        
+        for epoch in range(n_epochs):
+
+            for k, (x_batch, y_batch) in enumerate(data):
+
+                x_batch, y_batch = to_var(x_batch).float(), to_var(y_batch).float()
+                y_hat, regret = self.step(x_batch, y_batch)
+                m = x_batch.size(0)                
+                cost += 1 / (k+1) * (regret - cost)
+
+                if self.print_every != 0 and self.count % self.print_every == 0:
+
+                    losses.append(cost)
+                    
+                    # progress, time, avg loss, auc
+                    duration = timeSince(time_start)
+                    if int(duration.split('m')[0]) >= self.max_time:
+                        return losses
+                    
+                    to_print = ('%.2f%% (%s) %.4f' % ((epoch * n + (k+1) * m) /
+                                                      (n_epochs * n) * 100,
+                                                      duration,
+                                                      cost))
+                    
+                    print(to_print)
+
+                    if valdata is not None:
+                        acc = reportAcc(self,valdata)
+                        valloss = -acc
+                        vallosses.append(valloss)
+                        if valloss < best_valloss:
+                            best_valloss = valloss
+                            best_valindex = len(vallosses) - 1
+                            torch.save(self.model,
+                                       'nonlinear_models/%s.pt' % self.name)
+                            np.save('nonlinear_models/%s.loss' % self.name, losses)
+                            
+                        if len(vallosses) - best_valindex > self.n_early_stopping:
+                            print('early stop at iteration', self.count)
+                            return losses                            
+                        
+                        self.writer.add_scalar('data/val_acc', acc,
+                                               self.count)
+
+                    self.writer.add_scalar('model/grad_norm', gradNorm(self.model),
+                                           self.count)
+                    self.writer.add_scalar('data/train_loss', cost, self.count)
+                    
+                    # for tag, value in self.model.named_parameters():
+                    #     tag = tag.replace('.', '/')
+                    #     self.writer.add_histogram(tag, to_np(value), self.count)
+                    #     if value.grad is not None:
+                    #         self.writer.add_histogram(tag+'/grad', to_np(value.grad),
+                    #                                   self.count)
+                    cost = 0
+                    
+                self.count += 1
+
+        return losses
+
+    def transform(self, x):
+        return self.model(x)
+
+# combine various trainers
+class CombineTrainer(object):
+    def __init__(self, log_name=None):
+        self.log_name = log_name
         self.trainers = []
 
-    def addTrainer(trainer):
+    def add(self, trainer):
+        trainer.setLogName(self.log_name+'/'+str(len(self.trainers)))
+        if len(self.trainers) > 0:
+            # has to transform input from previous layer
+            prev_t = self.trainers[-1]
+            trainer.transform_function = chain_functions([prev_t.transform_function,
+                                                          prev_t.transform])
         self.trainers.append(trainer)
 
-    def fit(self, data):
-        for t in trainers():
-            t.fit(data)
-            # todo: trainsform input to next layer, change data to new data
+    def fit(self, data, **kwargs):
+
+        for t in self.trainers:
+            print('inside', t.__repr__)
+            t.fit(data, **kwargs)
+
+        
+
 
     
             
