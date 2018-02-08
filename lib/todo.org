@@ -2,10 +2,6 @@ linear:
 1) add Cdiff environment to this codebase
 2) add data generation code to here (synthetic dataset)
 
-nonlinear:
-1) add in early stopping
-2) reduce batch size
-
 observed issues:
 1) once entropy drops, it can not get back because of the expectation in loss function
    => low entropy sucks
@@ -18,6 +14,6 @@ observed issues:
 relevant experiment: triangle_2hidden, triangle_small
 a challenging dataset: square2*
 
-multitask learning:
-1. get independent task running
-2. get baselines running
+todos:
+1. change order of save from method/data to data/method
+2. refactor setLogName and others to use proper Object Oriented style

@@ -1,4 +1,4 @@
-import time
+import time, random, string
 import numpy as np
 import math
 from torch.autograd import Variable
@@ -14,6 +14,8 @@ from PIL import Image
 from torch.autograd import Function
 from scipy.linalg import block_diag
 import os
+from sklearn.externals import joblib
+from torch.utils.data import Dataset, DataLoader, TensorDataset
 
 def to_cuda(x):
     if torch.cuda.is_available():
@@ -299,7 +301,7 @@ def onehotize(z, ntasks):
     z is n x 1 long tensor variable
     '''
     m, d = z.size()
-    x_onehot = to_cuda(torch.FloatTensor(m, ntasks))
+    x_onehot = to_cuda(torch.FloatTensor(m, int(ntasks)))
     x_onehot.zero_()
     x_onehot.scatter_(1, z.data.long(), 1)
     return to_var(x_onehot)
@@ -312,6 +314,13 @@ def chain_functions(funcs):
         return x
     return ret
 
+def gen_random_string(n=5):
+    # first character has to be digit, it is n+1 characters
+    d = random.choice(string.digits)
+    return d + ''.join(random.choice(string.ascii_uppercase + \
+                                     string.ascii_lowercase +\
+                                     string.digits) for _ in range(n))
+    
 ### data generation helpers ###
 ### from my code on https://gist.github.com/anonymous/1ba9a828e814bfea6c5df4d97b443ade
 def genCovX(C, n): # helper function to create N(0, C)
@@ -323,3 +332,40 @@ def genCovX(C, n): # helper function to create N(0, C)
     X = Z.dot(A.T)
     return X.astype(np.float32)
 
+def loadData(dataname, get_test=False,
+             pin_memory=True, batch_size=1000,
+             num_workers=0):
+    # note: data are generated in heterogeneous groups ipython notebook
+    X, Y, Theta, \
+    Xval, Yval, val_theta,\
+    Xtest, Ytest, test_theta,\
+    ndim, n_islands = joblib.load('data/%s.pkl' % dataname)
+    
+    if get_test:
+        xtest = torch.from_numpy(Xtest).float()
+        ytest = torch.from_numpy(Ytest).float()
+
+        test_data = TensorDataset(xtest, ytest)
+        test_data = DataLoader(test_data, batch_size=batch_size,
+                               num_workers=num_workers, pin_memory=pin_memory)
+        return test_data, test_theta, ndim, n_islands
+
+    x = torch.from_numpy(X).float()
+    y = torch.from_numpy(Y).float()
+
+    train_data = TensorDataset(x, y)
+    train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True,
+                            num_workers=num_workers, pin_memory=pin_memory)
+
+    xval = torch.from_numpy(Xval).float()
+    yval = torch.from_numpy(Yval).float()
+
+    val_data = TensorDataset(xval, yval)
+    val_data = DataLoader(val_data, batch_size=batch_size,
+                           num_workers=num_workers, pin_memory=pin_memory)
+
+    print('train shape:', X.shape, 'n_islands:', n_islands, 'ndim:', ndim)
+    print('done loading data')
+    return train_data, val_data,\
+        Theta, val_theta,\
+        ndim, n_islands

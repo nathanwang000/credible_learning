@@ -23,4 +23,6 @@ bash run.sh
 
 * Nonlinear interpretation
 
-run credibility.ipynb
+#+BEGIN_SRC bash
+bash run_nonlinear.sh
+#+END_SRC

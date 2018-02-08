@@ -28,13 +28,13 @@ class Switch(nn.Module):
         
     def forward(self, x):
         if self.mtl: # the last one is task number
-            if len(x.size()) == 1:
+            if len(x.size()) == 1:                
                 t = np.zeros(self.input_size)
                 t[int(to_np(x[-1])[0])] = 1
-                x = to_var(torch.from_numpy(t).float())
+                x = to_var(torch.from_numpy(t).float()).view(1, -1)
             else:
                 x = x[:,-1:]                
-                x = onehotize(x, self.input_size)                
+                x = onehotize(x, self.input_size)                    
 
         o = self.i2o(x)
         return self.logsoftmax(o)

@@ -6,7 +6,7 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
-from lib.utility import onehotize
+from lib.utility import onehotize, gen_random_string
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
 from lib.utility import to_np, to_var, gradNorm, check_nan, fig2data, fig2img
 from lib.utility import to_cuda, valueNorm, reportAcc, reportMSE, chain_functions
@@ -18,6 +18,7 @@ from torchvision.transforms import ToTensor
 from time import gmtime, strftime
 from torch.distributions import Categorical
 import os
+from sklearn.externals import joblib
 from sklearn.cluster import KMeans, SpectralClustering
 
 def np2tensor(x, y):
@@ -144,7 +145,8 @@ class Trainer(object):
             return self.fitData(x, batch_size, n_epochs, print_every, valdata)
         else:
             return self.fitXy(x, y, batch_size, n_epochs, print_every, valdata)
-            
+
+########################## trainers for nonlinear models ########################
 class InterpretableTrainer(Trainer):
     def __init__(self, switchNet, weightNet, apply_f,
                  lr=0.001,
@@ -180,13 +182,9 @@ class InterpretableTrainer(Trainer):
         self.draw_plot = plot
 
         self.mtl = mtl
-        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
-        log_name = "" if log_name is None else log_name
-        self.log_dir = 'logs/' + os.path.join(log_name, comment)
-        self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.name = "name" if log_name is None else log_name
         self.silence = silence
-        self.count = 0
+
+        self.setLogName(log_name)
 
         self.optSwitch = torch.optim.Adam(self.switchNet.parameters(), lr=lr)
         self.optWeight = torch.optim.Adam(self.weightNet.parameters(), lr=lr)        
@@ -197,6 +195,15 @@ class InterpretableTrainer(Trainer):
         self.beta  = beta
         self.z = None
 
+    def setLogName(self, log_name, comment=None):
+        # comment is a unique  identifier of the run
+        if comment is None:
+            comment = gen_random_string()
+        name = os.path.join("default" if log_name is None else log_name, comment)
+        self.log_dir = 'logs/' + name
+        self.name = name
+        self.count = 0        
+        
     def sampleZ(self, x):
         n = x.size(0) # minibatch size        
         # determine which line to use
@@ -414,11 +421,15 @@ class InterpretableTrainer(Trainer):
         self.optWeight.step()        
         return yhat, regret.data[0]
 
-    def fit(self, data, batch_size=100, n_epochs=10, valdata=None, test_theta=None):
+    def fit(self, data, batch_size=100, n_epochs=10, valdata=None, val_theta=None):
         '''
         fit a model to x, y data by batch
-        test_theta: for recovering heterogeneous subpopulation
+        val_theta: for recovering heterogeneous subpopulation
         '''
+        savedir = os.path.dirname('nonlinear_models/%s' % self.name)
+        os.system('mkdir -p %s' % savedir)
+        self.writer = SummaryWriter(log_dir=self.log_dir)        
+        
         time_start = time.time()
         losses = []
         vallosses = [1000]
@@ -459,9 +470,10 @@ class InterpretableTrainer(Trainer):
                         acc = reportAcc(self,valdata)
                         valloss = -acc
                         vallosses.append(valloss)
-                        if valloss < best_valloss:
+                        if valloss <= best_valloss:
                             best_valloss = valloss
                             best_valindex = len(vallosses) - 1
+
                             torch.save(self.switchNet,
                                        'nonlinear_models/%s^switch.pt' % self.name)
                             torch.save(self.weightNet,
@@ -474,8 +486,8 @@ class InterpretableTrainer(Trainer):
                         
                         self.writer.add_scalar('data/val_acc', acc,
                                                self.count)
-                        if test_theta is not None:
-                            sim = self.evaluate_subpopulation(test_theta, valdata)
+                        if val_theta is not None:
+                            sim = self.evaluate_subpopulation(val_theta, valdata)
                             self.writer.add_scalar('data/subpopulation_cosine',
                                                    sim, self.count)
 
@@ -503,7 +515,8 @@ class InterpretableTrainer(Trainer):
         return losses
 
     def plotMTL(self):
-        import seaborn as sns        
+        import seaborn as sns
+        import matplotlib.pyplot as plt
         if not self.mtl:
             return
 
@@ -533,15 +546,16 @@ class InterpretableTrainer(Trainer):
                               self.count)
         plt.close()
         
-    def evaluate_subpopulation(self, test_theta, test_data):
-        # cosine similarity between test_theta and Xtest
+    def evaluate_subpopulation(self, val_theta, val_data):
+
+        # cosine similarity between val_theta and val_explanation
         i = 0
         sim = 0
-        for x, y in test_data:
+        for x, y in val_data:
             m = x.size(0)
             x, y = to_var(x), to_var(y)
             f = to_np(self.explain(x))
-            w = test_theta[i:i+m]
+            w = val_theta[i:i+m]
             
             f_norm = np.sqrt((f * f).sum(1)) + 1e-10
             w_norm = np.sqrt((w * w).sum(1)) + 1e-10
@@ -557,7 +571,10 @@ class InterpretableTrainer(Trainer):
         '''
 
         if x.data.shape[1]  > 2: return
-        import matplotlib.pyplot as plt                
+        
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
         plt.figure(figsize=(10,10))
         _ = plotDecisionSurface(self.forward, xmin, xmax, ymin, ymax,
                                 multioutput=False, colors=['white', 'black'])
@@ -639,12 +656,13 @@ class AutoEncoderTrainer(object):
         self.print_every = print_every
         self.setLogName(log_name)
         
-    def setLogName(self, log_name):
-        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
-        log_name = "" if log_name is None else log_name
-        self.log_dir = 'logs/' + os.path.join(log_name, comment)
-        self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.name = "name" if log_name is None else log_name        
+    def setLogName(self, log_name, comment=None):
+        # comment is a unique  identifier of the run
+        if comment is None:
+            comment = gen_random_string()
+        name = os.path.join("default" if log_name is None else log_name, comment)
+        self.log_dir = 'logs/' + name
+        self.name = name
         self.count = 0
         
     def forward(self, x):
@@ -664,11 +682,15 @@ class AutoEncoderTrainer(object):
         return yhat, regret.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
-            valdata=None, test_theta=None):
+            valdata=None, val_theta=None):
         '''
         fit a model to x, y data by batch
-        test_theta: for recovering heterogeneous subpopulation
+        val_theta: for recovering heterogeneous subpopulation
         '''
+        savedir = os.path.dirname('nonlinear_models/%s' % self.name)
+        os.system('mkdir -p %s' % savedir)
+        self.writer = SummaryWriter(log_dir=self.log_dir)        
+        
         time_start = time.time()
         losses = []
         vallosses = [1000]
@@ -706,9 +728,10 @@ class AutoEncoderTrainer(object):
                         _mse = reportMSE(self,valdata,is_autoencoder=True)
                         valloss = _mse
                         vallosses.append(valloss)
-                        if valloss < best_valloss:
+                        if valloss <= best_valloss:
                             best_valloss = valloss
                             best_valindex = len(vallosses) - 1
+
                             torch.save(self.autoencoder,
                                        'nonlinear_models/%s.pt' % self.name)
                             np.save('nonlinear_models/%s.loss' % self.name, losses)
@@ -717,13 +740,12 @@ class AutoEncoderTrainer(object):
                             print('early stop at iteration', self.count)
                             return losses                            
 
-                        # self.writer.add_scalar('data/train_loss', cost, self.count)
                         self.writer.add_scalar('data/val_mse', _mse, self.count)
 
                         
                     self.writer.add_scalar('model/grad_norm', gradNorm(self.autoencoder),
                                            self.count)
-                    self.writer.add_scalar('data/train_loss', cost, self.count)
+                    # self.writer.add_scalar('data/train_loss', cost, self.count)
                     
                     cost = 0
                     
@@ -738,16 +760,28 @@ class AutoEncoderTrainer(object):
         return self.autoencoder.embed(x)
 
 class KmeansTrainer(object):
-    def __init__(self, k, use_spectral=False):
+    def __init__(self, k, use_spectral=False, clf=None, log_name=None):
         '''
         k: number of clusters
         '''
         self.k = k
         self.transform_function = lambda x: x # used in combined trainer
-        if use_spectral:
-            self.clf = SpectralClustering(n_clusters=k)
+
+        if clf is None:
+            if use_spectral:
+                self.clf = SpectralClustering(n_clusters=k)
+            else:
+                self.clf = KMeans(n_clusters=k)
         else:
-            self.clf = KMeans(n_clusters=k)
+            self.clf = clf
+
+        self.setLogName(log_name)
+
+    def setLogName(self, log_name, comment=None):
+        # comment is a unique  identifier of the run
+        if comment is None:
+            comment = gen_random_string()
+        self.name = os.path.join("default" if log_name is None else log_name, comment)
 
     def fit(self, data, **kwargs):
         x, y = data.dataset[:] # x is the original input, not necessarily kmeans input
@@ -756,6 +790,10 @@ class KmeansTrainer(object):
 
         x = to_np(x)
         self.clf.fit(x)
+
+        savedir = os.path.dirname('nonlinear_models/%s' % self.name)
+        os.system('mkdir -p %s' % savedir)                      
+        joblib.dump(self.clf, 'nonlinear_models/%s.pkl' % self.name)
 
     def transform(self, x):
         '''
@@ -767,8 +805,6 @@ class KmeansTrainer(object):
         clusters = onehotize(to_var(torch.from_numpy(clusters)).view(-1, 1), self.k)
         return clusters
 
-    def setLogName(self, logname):
-        self.log_name = logname
     
 class WeightNetTrainer(InterpretableTrainer):
     def __init__(self, weightNet, apply_f, lr=0.001, print_every=100,
@@ -788,12 +824,13 @@ class WeightNetTrainer(InterpretableTrainer):
         self.print_every = print_every
         self.setLogName(log_name)
 
-    def setLogName(self, log_name):
-        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
-        log_name = "" if log_name is None else log_name
-        self.log_dir = 'logs/' + os.path.join(log_name, comment)
-        self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.name = "name" if log_name is None else log_name        
+    def setLogName(self, log_name, comment=None):
+        # comment is a unique  identifier of the run
+        if comment is None:
+            comment = gen_random_string()
+        name = os.path.join("default" if log_name is None else log_name, comment)
+        self.log_dir = 'logs/' + name
+        self.name = name
         self.count = 0
         
     def explain(self, x):
@@ -820,11 +857,15 @@ class WeightNetTrainer(InterpretableTrainer):
         return yhat, regret.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
-            valdata=None, test_theta=None):
+            valdata=None, val_theta=None):
         '''
         fit a model to x, y data by batch
-        test_theta: for recovering heterogeneous subpopulation
+        val_theta: for recovering heterogeneous subpopulation
         '''
+        savedir = os.path.dirname('nonlinear_models/%s' % self.name)
+        os.system('mkdir -p %s' % savedir)
+        self.writer = SummaryWriter(log_dir=self.log_dir)        
+        
         time_start = time.time()
         losses = []
         vallosses = [1000]
@@ -865,11 +906,12 @@ class WeightNetTrainer(InterpretableTrainer):
                         acc = reportAcc(self,valdata)
                         valloss = -acc
                         vallosses.append(valloss)
-                        if valloss < best_valloss:
+                        if valloss <= best_valloss:
                             best_valloss = valloss
                             best_valindex = len(vallosses) - 1
+
                             torch.save(self.weightNet,
-                                       'nonlinear_models/%s^weight.pt' % self.name)
+                                       'nonlinear_models/%s.pt' % self.name)
                             np.save('nonlinear_models/%s.loss' % self.name, losses)
                             
                         if len(vallosses) - best_valindex > self.n_early_stopping:
@@ -878,8 +920,8 @@ class WeightNetTrainer(InterpretableTrainer):
                         
                         self.writer.add_scalar('data/val_acc', acc,
                                                self.count)
-                        if test_theta is not None:
-                            sim = self.evaluate_subpopulation(test_theta, valdata)
+                        if val_theta is not None:
+                            sim = self.evaluate_subpopulation(val_theta, valdata)
                             self.writer.add_scalar('data/subpopulation_cosine',
                                                    sim, self.count)
 
@@ -906,9 +948,10 @@ class WeightNetTrainer(InterpretableTrainer):
         return self.weightNet(x)
 
 
-class MLPTrainer(object):
+class MLPTrainer(InterpretableTrainer):
     def __init__(self, model, lr=0.001, print_every=100,
-                 log_name=None, max_time=30, n_early_stopping=50):
+                 log_name=None, max_time=30, n_early_stopping=50,
+                 islinear=False):
 
         '''
         print_every is 0 if do not wish to print
@@ -922,18 +965,28 @@ class MLPTrainer(object):
         self.loss = nn.SoftMarginLoss() # logit loss
         self.print_every = print_every
         self.setLogName(log_name)
+        self.islinear = islinear
 
-    def setLogName(self, log_name):
-        comment =  strftime("%Y-%m-%d_%H:%M:%S", gmtime())
-        log_name = "" if log_name is None else log_name
-        self.log_dir = 'logs/' + os.path.join(log_name, comment)
-        self.writer = SummaryWriter(log_dir=self.log_dir)
-        self.name = "name" if log_name is None else log_name        
+    def setLogName(self, log_name, comment=None):
+        # comment is a unique  identifier of the run
+        if comment is None:
+            comment = gen_random_string()
+        name = os.path.join("default" if log_name is None else log_name, comment)
+        self.log_dir = 'logs/' + name
+        self.name = name
         self.count = 0
         
     def forward(self, x):
         x = self.transform_function(x)
         return self.model(x)
+
+    def explain(self, x):
+        if not self.islinear:
+            raise Exception('only linear model can explain')
+
+        n, d = x.size()
+        m = self.model
+        return torch.cat((m.weight.view(-1), m.bias)).expand(n, d+1)
     
     def step(self, x, y):
         '''
@@ -948,11 +1001,15 @@ class MLPTrainer(object):
         return yhat, regret.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
-            valdata=None, test_theta=None):
+            valdata=None, val_theta=None):
         '''
         fit a model to x, y data by batch
-        test_theta: for recovering heterogeneous subpopulation
+        val_theta: for recovering heterogeneous subpopulation
         '''
+        savedir = os.path.dirname('nonlinear_models/%s' % self.name)
+        os.system('mkdir -p %s' % savedir)
+        self.writer = SummaryWriter(log_dir=self.log_dir)
+        
         time_start = time.time()
         losses = []
         vallosses = [1000]
@@ -990,9 +1047,10 @@ class MLPTrainer(object):
                         acc = reportAcc(self,valdata)
                         valloss = -acc
                         vallosses.append(valloss)
-                        if valloss < best_valloss:
+                        if valloss <= best_valloss:
                             best_valloss = valloss
                             best_valindex = len(vallosses) - 1
+
                             torch.save(self.model,
                                        'nonlinear_models/%s.pt' % self.name)
                             np.save('nonlinear_models/%s.loss' % self.name, losses)
@@ -1003,6 +1061,12 @@ class MLPTrainer(object):
                         
                         self.writer.add_scalar('data/val_acc', acc,
                                                self.count)
+
+                        if val_theta is not None and self.islinear:
+                            sim = self.evaluate_subpopulation(val_theta, valdata)
+                            self.writer.add_scalar('data/subpopulation_cosine',
+                                                   sim, self.count)
+                        
 
                     self.writer.add_scalar('model/grad_norm', gradNorm(self.model),
                                            self.count)
@@ -1024,13 +1088,15 @@ class MLPTrainer(object):
         return self.model(x)
 
 # combine various trainers
-class CombineTrainer(object):
+class CombineTrainer(InterpretableTrainer):
     def __init__(self, log_name=None):
         self.log_name = log_name
         self.trainers = []
+        self.comment = gen_random_string()
 
     def add(self, trainer):
-        trainer.setLogName(self.log_name+'/'+str(len(self.trainers)))
+        trainer.setLogName(self.log_name+'/'+str(len(self.trainers)),
+                           comment=self.comment)
         if len(self.trainers) > 0:
             # has to transform input from previous layer
             prev_t = self.trainers[-1]
@@ -1044,7 +1110,12 @@ class CombineTrainer(object):
             print('inside', t.__repr__)
             t.fit(data, **kwargs)
 
-        
+    def forward(self, x):
+        return self.trainers[-1].forward(x)
+
+    def explain(self, x):
+        return self.trainers[-1].explain(x)
+
 
 
     
