@@ -4,6 +4,7 @@ import math
 from torch.autograd import Variable
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.metrics import average_precision_score, confusion_matrix
+from lib.data import Mimic2
 import numpy as np
 import time
 from torch.utils.data.sampler import WeightedRandomSampler
@@ -27,7 +28,10 @@ def to_np(x):
 
 def to_var(x, *args, **kwargs):
     x = to_cuda(x)
-    return Variable(x, *args, **kwargs)   
+    return Variable(x, *args, **kwargs)
+
+def np2tensor(x, y):
+    return torch.from_numpy(x).float(), torch.from_numpy(y).long()
 
 def check_nan(v):
     return np.isnan(to_np(v)).sum() > 0
@@ -54,12 +58,14 @@ def get_y_yhat(model, data):
     return np.hstack(ys), np.vstack(yhat)
 
 def model_auc(model, data):
+    # note that this is for 2 classes, for 1 output, use report auc instead
     yhat = []
     ys = []
     for x, y in data:
         ys.append(y.numpy())
         x, y = to_var(x), to_var(y)
-        yhat.append(to_np(model(x)))
+        yhat.append(to_np(model.forward(x)))
+
     y, yhat = np.hstack(ys), np.vstack(yhat)[:,1]
     return roc_auc_score(y, yhat)    
 
@@ -271,6 +277,20 @@ def fig2img ( fig ):
     w, h, d = buf.shape
     return Image.frombytes( "RGBA", ( w ,h ), buf.tostring( ) )
 
+def reportAuc(model, data):
+    # note that this is for 1 classes, for 2 output, use modelAuc instead
+    yhat = []
+    ys = []
+    for x, y in data:
+        localy = y.numpy()
+        localy[np.nonzero(localy == -1)] = 0 # binarize
+        ys.append(localy)
+        x, y = to_var(x), to_var(y)
+        yhat.append(to_np(model.forward(x)))
+
+    y, yhat = np.hstack(ys), np.vstack(yhat).ravel()
+    return roc_auc_score(y, yhat)    
+
 def reportAcc(model, test_data):
     accuracy = 0
     for k, (x, y) in enumerate(test_data):
@@ -335,6 +355,42 @@ def genCovX(C, n): # helper function to create N(0, C)
 def loadData(dataname, get_test=False,
              pin_memory=True, batch_size=1000,
              num_workers=0):
+
+    if dataname == 'mimic2':
+        m = Mimic2(mode='total')
+        ndim = m.xtrain.shape[1]
+        if get_test:
+            xtrain = np.vstack([m.xtrain, m.xval])
+            xval = m.xte
+            ytrain = np.hstack([m.ytrain, m.yval])
+            yval = m.yte
+        else:
+            xtrain = m.xtrain
+            xval = m.xval
+            ytrain = m.ytrain
+            yval = m.yval
+
+        # make y in {-1, 1}
+        ytrain = ytrain * 2 - 1
+        yval = yval * 2 - 1
+        
+        d = m.r.size(0)
+        train_data = TensorDataset(*np2tensor(xtrain, ytrain))
+        data = DataLoader(train_data, shuffle=True,
+                          batch_size=batch_size,
+                          num_workers=num_workers, pin_memory=pin_memory)
+
+        valdata = TensorDataset(*np2tensor(xval, yval))
+        valdata = DataLoader(valdata, batch_size=batch_size,
+                             num_workers=num_workers, pin_memory=pin_memory)
+
+        if get_test:
+            return valdata, None, ndim, None
+        else:
+            print('train shape:', xtrain.shape, 'n_islands:', None, 'ndim:', ndim)
+            print('done loading data')
+            return data, valdata, None, None, ndim, None
+
     # note: data are generated in heterogeneous groups ipython notebook
     X, Y, Theta, \
     Xval, Yval, val_theta,\

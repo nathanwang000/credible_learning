@@ -6,10 +6,10 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 import time, math
 from lib.utility import timeSince, data_shuffle, model_auc, calc_loss, model_acc
-from lib.utility import onehotize, gen_random_string
+from lib.utility import onehotize, gen_random_string, chain_functions
 from lib.utility import var2constvar, logit_elementwise_loss, plotDecisionSurface
 from lib.utility import to_np, to_var, gradNorm, check_nan, fig2data, fig2img
-from lib.utility import to_cuda, valueNorm, reportAcc, reportMSE, chain_functions
+from lib.utility import to_cuda, valueNorm, reportAuc, reportAcc, reportMSE
 from sklearn.metrics import accuracy_score
 from lib.settings import DISCRETE_COLORS
 from tensorboardX import SummaryWriter
@@ -20,9 +20,6 @@ from torch.distributions import Categorical
 import os
 from sklearn.externals import joblib
 from sklearn.cluster import KMeans, SpectralClustering
-
-def np2tensor(x, y):
-    return torch.from_numpy(x).float(), torch.from_numpy(y).long()
 
 def prepareData(x, y):
     ''' 
@@ -157,9 +154,12 @@ class InterpretableTrainer(Trainer):
                  silence=True,
                  mtl=False,
                  max_time=30,
-                 n_early_stopping=50,
+                 n_early_stopping=100,
                  print_every=100,
-                 plot=True):
+                 plot=True,
+                 weight_decay=0,
+                 switch_update_every=1,
+                 weight_update_every=1):
         '''
         optimizer: optimization method, default to adam
         alpha: z entropy weight
@@ -168,6 +168,8 @@ class InterpretableTrainer(Trainer):
         silence: don't output graph and statement
         mtl: multi-task learning
         print_every: print every few iterations, if 0 then don't print
+        weight_update_every: update weight every few steps
+        switch_update_every: update switch every few steps
         '''
         switchNet = to_cuda(switchNet)
         weightNet = to_cuda(weightNet)
@@ -180,14 +182,18 @@ class InterpretableTrainer(Trainer):
         self.n_early_stopping = n_early_stopping
         self.print_every = print_every
         self.draw_plot = plot
+        self.weight_update_every = weight_update_every
+        self.switch_update_every = switch_update_every
 
         self.mtl = mtl
         self.silence = silence
 
         self.setLogName(log_name)
 
-        self.optSwitch = torch.optim.Adam(self.switchNet.parameters(), lr=lr)
-        self.optWeight = torch.optim.Adam(self.weightNet.parameters(), lr=lr)        
+        self.optSwitch = torch.optim.Adam(self.switchNet.parameters(), lr=lr,
+                                          weight_decay=weight_decay)
+        self.optWeight = torch.optim.Adam(self.weightNet.parameters(), lr=lr,
+                                          weight_decay=weight_decay)    
         self.loss = nn.SoftMarginLoss() # logit loss
         self.elementwise_loss = logit_elementwise_loss
         self.max_grad = max_grad
@@ -365,9 +371,10 @@ class InterpretableTrainer(Trainer):
                 _z_entropy_loss += p_z_x[:, i] * (z_entropy_loss + 1)
                 _y_entropy_loss += p_z_x[:, i] * y_entropy_loss 
 
-            switch_cost.mean().backward()
-            weight_cost.mean().backward()
-
+            if self.count % self.switch_update_every == 0:
+                switch_cost.mean().backward()
+            if self.count % self.weight_update_every == 0:
+                weight_cost.mean().backward()
 
             if self.print_every != 0 and self.count % self.print_every == 0:
                 hz = _z_entropy_loss.mean().data[0]
@@ -421,7 +428,8 @@ class InterpretableTrainer(Trainer):
         self.optWeight.step()        
         return yhat, regret.data[0]
 
-    def fit(self, data, batch_size=100, n_epochs=10, valdata=None, val_theta=None):
+    def fit(self, data, batch_size=100, n_epochs=10, valdata=None, val_theta=None,
+            use_auc=False):
         '''
         fit a model to x, y data by batch
         val_theta: for recovering heterogeneous subpopulation
@@ -467,7 +475,11 @@ class InterpretableTrainer(Trainer):
                         self.plot(x_batch, y_batch, silence=self.silence, inrange=True)
 
                     if valdata is not None:
-                        acc = reportAcc(self,valdata)
+                        if use_auc:
+                            acc = reportAuc(self, valdata)
+                        else:
+                            acc = reportAcc(self,valdata)
+                            
                         valloss = -acc
                         vallosses.append(valloss)
                         if valloss <= best_valloss:
@@ -483,9 +495,15 @@ class InterpretableTrainer(Trainer):
                         if len(vallosses) - best_valindex > self.n_early_stopping:
                             print('early stop at iteration', self.count)
                             return losses                            
-                        
-                        self.writer.add_scalar('data/val_acc', acc,
-                                               self.count)
+
+                        if use_auc:
+                            # note that acc here is auc
+                            self.writer.add_scalar('data/val_auc', acc,
+                                                   self.count)
+                        else:
+                            self.writer.add_scalar('data/val_acc', acc,
+                                                   self.count)
+                            
                         if val_theta is not None:
                             sim = self.evaluate_subpopulation(val_theta, valdata)
                             self.writer.add_scalar('data/subpopulation_cosine',
@@ -546,23 +564,38 @@ class InterpretableTrainer(Trainer):
                               self.count)
         plt.close()
         
-    def evaluate_subpopulation(self, val_theta, val_data):
+    def evaluate_subpopulation(self, val_theta, val_data,
+                               theta_constraint=lambda x: True):
 
-        # cosine similarity between val_theta and val_explanation
+        ''' cosine similarity between val_theta and val_explanation 
+        theta_constraint: thata that satisfy the constraint
+        '''
         i = 0
         sim = 0
+        num = 0 # number of comparison
         for x, y in val_data:
             m = x.size(0)
             x, y = to_var(x), to_var(y)
             f = to_np(self.explain(x))
             w = val_theta[i:i+m]
+
+            valid = map(theta_constraint, f)
+            valid = np.nonzero(list(valid))
+            f = f[valid]
+            w = w[valid]
+
+            i += m
+            num += f.shape[0]
+
+            if f.shape[0] == 0:
+                continue
             
             f_norm = np.sqrt((f * f).sum(1)) + 1e-10
             w_norm = np.sqrt((w * w).sum(1)) + 1e-10
             angle = (w * f).sum(1) / f_norm / w_norm
             sim += angle.sum()
-            i += m
-        return sim / i
+            
+        return sim / num
     
     def plot(self, x, y, xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5,
              inrange=False, silence=False):
@@ -642,14 +675,16 @@ class InterpretableTrainer(Trainer):
 
 class AutoEncoderTrainer(object):
     def __init__(self, autoencoder, lr=0.001, print_every=100,
-                 log_name=None, max_time=30, n_early_stopping=50):
+                 log_name=None, max_time=30, n_early_stopping=100,
+                 weight_decay=0):
         '''
         print_every is 0 if do not wish to print
         '''
         self.transform_function = lambda x: x # identity, for combined trainer
         
         self.autoencoder = to_cuda(autoencoder)
-        self.optimizer = torch.optim.Adam(self.autoencoder.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.autoencoder.parameters(), lr=lr,
+                                          weight_decay=weight_decay)
         self.max_time = max_time
         self.n_early_stopping = n_early_stopping
         self.loss = nn.MSELoss() # l2 loss
@@ -805,10 +840,61 @@ class KmeansTrainer(object):
         clusters = onehotize(to_var(torch.from_numpy(clusters)).view(-1, 1), self.k)
         return clusters
 
+class PosKmeansTrainer(object):
+
+    '''
+    perform kmeans on positive class
+    and then combine both
+    '''
+    
+    def __init__(self, k, clf=None, log_name=None):
+        '''
+        k: number of clusters
+        '''
+        self.k = k
+        self.transform_function = lambda x: x # used in combined trainer
+
+        if clf is None:
+            self.clf = KMeans(n_clusters=k)
+        else:
+            self.clf = clf
+
+        self.setLogName(log_name)
+
+    def setLogName(self, log_name, comment=None):
+        # comment is a unique  identifier of the run
+        if comment is None:
+            comment = gen_random_string()
+        self.name = os.path.join("default" if log_name is None else log_name, comment)
+
+    def fit(self, data, **kwargs):
+        x, y = data.dataset[:] # x is the original input, not necessarily kmeans input
+        x = to_var(x)
+        x = self.transform_function(x)
+
+        x = to_np(x)
+        y = y.numpy()
+        x = x[np.nonzero(y==1)]
+        self.clf.fit(x)
+
+        savedir = os.path.dirname('nonlinear_models/%s' % self.name)
+        os.system('mkdir -p %s' % savedir)                      
+        joblib.dump(self.clf, 'nonlinear_models/%s_pos.pkl' % self.name)
+
+    def transform(self, x):
+        '''
+        x is a pytorch Variable tensor, this works for combine
+        x is the output of previous trainer.transform
+        '''
+        x = to_np(x)
+        clusters = self.clf.predict(x)
+        clusters = onehotize(to_var(torch.from_numpy(clusters)).view(-1, 1), self.k)
+        return clusters
     
 class WeightNetTrainer(InterpretableTrainer):
     def __init__(self, weightNet, apply_f, lr=0.001, print_every=100,
-                 log_name=None, max_time=30, n_early_stopping=50):
+                 log_name=None, max_time=30, n_early_stopping=100,
+                 weight_decay=0):
 
         '''
         print_every is 0 if do not wish to print
@@ -817,7 +903,8 @@ class WeightNetTrainer(InterpretableTrainer):
         
         self.weightNet = to_cuda(weightNet)
         self.apply_f = apply_f
-        self.optimizer = torch.optim.Adam(self.weightNet.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.weightNet.parameters(), lr=lr,
+                                          weight_decay=weight_decay)
         self.max_time = max_time
         self.n_early_stopping = n_early_stopping
         self.loss = nn.SoftMarginLoss() # logit loss
@@ -857,7 +944,7 @@ class WeightNetTrainer(InterpretableTrainer):
         return yhat, regret.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
-            valdata=None, val_theta=None):
+            valdata=None, val_theta=None, use_auc=False):
         '''
         fit a model to x, y data by batch
         val_theta: for recovering heterogeneous subpopulation
@@ -903,7 +990,11 @@ class WeightNetTrainer(InterpretableTrainer):
                     #     self.plot(x_batch, y_batch, silence=self.silence, inrange=True)
 
                     if valdata is not None:
-                        acc = reportAcc(self,valdata)
+                        if use_auc:
+                            acc = reportAuc(self, valdata)
+                        else:
+                            acc = reportAcc(self,valdata)
+
                         valloss = -acc
                         vallosses.append(valloss)
                         if valloss <= best_valloss:
@@ -917,9 +1008,15 @@ class WeightNetTrainer(InterpretableTrainer):
                         if len(vallosses) - best_valindex > self.n_early_stopping:
                             print('early stop at iteration', self.count)
                             return losses                            
-                        
-                        self.writer.add_scalar('data/val_acc', acc,
-                                               self.count)
+
+                        if use_auc:
+                            # note acc here is auc
+                            self.writer.add_scalar('data/val_auc', acc,
+                                                   self.count)
+                        else:
+                            self.writer.add_scalar('data/val_acc', acc,
+                                                   self.count)
+                            
                         if val_theta is not None:
                             sim = self.evaluate_subpopulation(val_theta, valdata)
                             self.writer.add_scalar('data/subpopulation_cosine',
@@ -947,11 +1044,10 @@ class WeightNetTrainer(InterpretableTrainer):
     def transform(self, x):
         return self.weightNet(x)
 
-
 class MLPTrainer(InterpretableTrainer):
     def __init__(self, model, lr=0.001, print_every=100,
-                 log_name=None, max_time=30, n_early_stopping=50,
-                 islinear=False):
+                 log_name=None, max_time=30, n_early_stopping=100,
+                 islinear=False, weight_decay=0):
 
         '''
         print_every is 0 if do not wish to print
@@ -959,7 +1055,8 @@ class MLPTrainer(InterpretableTrainer):
         self.transform_function = lambda x: x # identity, for combined trainer
         
         self.model = to_cuda(model)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr,
+                                          weight_decay=weight_decay)
         self.max_time = max_time
         self.n_early_stopping = n_early_stopping
         self.loss = nn.SoftMarginLoss() # logit loss
@@ -981,12 +1078,17 @@ class MLPTrainer(InterpretableTrainer):
         return self.model(x)
 
     def explain(self, x):
-        if not self.islinear:
-            raise Exception('only linear model can explain')
-
-        n, d = x.size()
-        m = self.model
-        return torch.cat((m.weight.view(-1), m.bias)).expand(n, d+1)
+        n, d = x.size()        
+        if self.islinear:
+            m = self.model
+            return torch.cat((m.weight.view(-1), m.bias)).expand(n, d+1)
+        else: # use input gradient that pass through the point as explanation
+            x.requires_grad = True
+            y = self.forward(x)
+            y.sum().backward()
+            theta = x.grad
+            b = -(theta * x).sum(1).view(-1,1)
+            return torch.cat([theta, b], dim=1)
     
     def step(self, x, y):
         '''
@@ -1001,7 +1103,7 @@ class MLPTrainer(InterpretableTrainer):
         return yhat, regret.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
-            valdata=None, val_theta=None):
+            valdata=None, val_theta=None, use_auc=False):
         '''
         fit a model to x, y data by batch
         val_theta: for recovering heterogeneous subpopulation
@@ -1044,7 +1146,11 @@ class MLPTrainer(InterpretableTrainer):
                     print(to_print)
 
                     if valdata is not None:
-                        acc = reportAcc(self,valdata)
+                        if use_auc:
+                            acc = reportAuc(self, valdata)
+                        else:
+                            acc = reportAcc(self,valdata)
+
                         valloss = -acc
                         vallosses.append(valloss)
                         if valloss <= best_valloss:
@@ -1058,11 +1164,16 @@ class MLPTrainer(InterpretableTrainer):
                         if len(vallosses) - best_valindex > self.n_early_stopping:
                             print('early stop at iteration', self.count)
                             return losses                            
-                        
-                        self.writer.add_scalar('data/val_acc', acc,
-                                               self.count)
 
-                        if val_theta is not None and self.islinear:
+                        if use_auc:
+                            # note that acc here is auc
+                            self.writer.add_scalar('data/val_auc', acc,
+                                                   self.count)
+                        else:
+                            self.writer.add_scalar('data/val_acc', acc,
+                                                   self.count)
+                            
+                        if val_theta is not None:
                             sim = self.evaluate_subpopulation(val_theta, valdata)
                             self.writer.add_scalar('data/subpopulation_cosine',
                                                    sim, self.count)
