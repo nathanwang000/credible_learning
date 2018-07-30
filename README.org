@@ -20,9 +20,3 @@
 #+BEGIN_SRC bash
 bash run.sh
 #+END_SRC
-
-* Nonlinear interpretation
-
-#+BEGIN_SRC bash
-bash run_nonlinear.sh
-#+END_SRC
