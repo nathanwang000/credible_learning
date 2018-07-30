@@ -13,6 +13,8 @@
 #+LANGUAGE: en
 #+SELECT_TAGS: export
 
+Code for paper [Learning Credible Models](https://arxiv.org/pdf/1711.03190.pdf)
+
 * Eye regularization
 
 ** MIMIC2 dataset
