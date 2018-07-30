@@ -13,7 +13,7 @@
 #+LANGUAGE: en
 #+SELECT_TAGS: export
 
-Code for paper [[https://arxiv.org/pdf/1711.03190.pdf][Learning Credible Models]]
+Code for paper [[https://arxiv.org/pdf/1711.03190.pdf][Learning Credible Models]] (to be presented at KDD 2018)
 
 In many settings, it is important that a model be capable of providing reasons for its predictions (i.e., the model must be interpretable). However, the model’s reasoning may not conform with well-established knowledge. In such cases, while interpretable, the
 model lacks credibility. In this work, we formally define credibility in the linear setting and focus on techniques for learning models
