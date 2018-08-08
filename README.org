@@ -25,6 +25,6 @@ Implementation of the EYE penalty can be find in [[lib/regularization.py]]. MIMI
 bash run.sh
 #+END_SRC
 
-The synthetic data is generated via code in [[synthetic_data_generation.py]]
+The synthetic data is generated via code in [[synthetic_data_generation.py]].
 
 We provide a small example of using this package in [[example.py]].
