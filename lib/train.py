@@ -21,6 +21,8 @@ import os
 from sklearn.externals import joblib
 from sklearn.cluster import KMeans, SpectralClustering
 
+os.system('mkdir -p models/')  # always save in models
+
 def prepareData(x, y):
     ''' 
     convert x, y from numpy to tensor

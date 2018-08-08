@@ -12,22 +12,20 @@ import torch
 from torch.autograd import Variable
 import os
 
-os.system('mkdir -p models')
+def model_acc(model, x, y):                                          
+    x, _ = prepareData(x, y)                                                   
+    yhat = np.argmax(to_np(model(x)), 1)                                       
+    return accuracy_score(y, yhat)
 
-def model_acc(model, x, y):                                                                                                                                                        
-    x, _ = prepareData(x, y)                                                                                                                                                       
-    yhat = np.argmax(to_np(model(x)), 1)                                                                                                                                     
-    return accuracy_score(y, yhat)                                                                                                                                                 
+n, d = 1000, 2  
 
-n, d = 1000, 2                                                                                                                                                                     
+def gendata(): 
+    x = np.random.randn(n, d)
+    y = (x.sum(1) > 0).astype(np.int)
+    return x, y
 
-def gendata():                                                                                                                                                                     
-    x = np.random.randn(n, d)                                                                                                                                                      
-    y = (x.sum(1) > 0).astype(np.int)                                                                                                                                              
-    return x, y                                                                                                                                                                    
-
-xtr, ytr = gendata()                                                                                                                                                               
-xte, yte = gendata()                                                                                                                                                               
+xtr, ytr = gendata()
+xte, yte = gendata()
 
 r = to_var(torch.FloatTensor([0, 1]))
 train_data = TensorDataset(*map(lambda x: x.data, prepareData(xtr, ytr)))
@@ -36,7 +34,7 @@ data = DataLoader(train_data, batch_size=100, shuffle=True)
 n_output = 2 # binary classification task         
 model = LR(d, n_output)            
 learning_rate = 0.01
-alpha = 0.08  # regularization strength                                                  
+alpha = 0.08  # regularization strength                                  
 
 reg_parameters = model.i2o.weight
 t = Trainer(model, lr=learning_rate, risk_factors=r, alpha=alpha,

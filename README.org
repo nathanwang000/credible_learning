@@ -20,11 +20,13 @@ model lacks credibility. In this work, we formally define credibility in the lin
 that are both accurate and credible. In particular, we propose a regularization penalty, expert yielded estimates (EYE), that incorporates
 expert knowledge about well-known relationships among covariates and the outcome of interest.  We give both theoretical and empirical results comparing our proposed method to several other regularization techniques. Across a range of settings, experiments on both synthetic and real data show that models learned using the EYE penalty are significantly more credible than those learned using other penalties. Applied to two large-scale patient risk stratification task, our proposed technique results in a model whose top features overlap significantly with known clinical risk factors, while still achieving good predictive performance.
 
-Implementation of the EYE penalty can be find in [[lib/regularization.py]]. MIMIC2 dataset result is attained by running:
+Implementation of the EYE penalty can be found in [[lib/regularization.py]]. The
+synthetic data is generated via code in [[synthetic_data_generation.py]]. 
+
+MIMIC2 dataset result is attained by running:
 #+BEGIN_SRC bash
 bash run.sh
+python eval_MIMIC2.py
 #+END_SRC
 
-The synthetic data is generated via code in [[synthetic_data_generation.py]].
-
-We provide a small example of using this package in [[example.py]].
+We provide a small example of using this package, please look through code in [[example.py]].
