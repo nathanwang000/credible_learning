@@ -17,9 +17,10 @@ from scipy.linalg import block_diag
 import os
 from sklearn.externals import joblib
 from torch.utils.data import Dataset, DataLoader, TensorDataset
+from lib.settings import USE_GPU
 
 def to_cuda(x):
-    if torch.cuda.is_available():
+    if USE_GPU and torch.cuda.is_available():
         x = x.cuda()
     return x
 
