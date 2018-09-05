@@ -11,15 +11,22 @@ from sklearn.preprocessing import StandardScaler
 class Mimic2(Dataset):
 
     def __init__(self, mode='total', random_risk=False,
-                 expert_feature_only=False, duplicate=0):
+                 expert_feature_only=False, duplicate=0,
+                 two_stage=False):
         '''
         mode in [dead, survivor, total]: ways to impute missingness
         '''
         self.path = 'data/mimic/' + mode + '_mean_finalset.csv'
         self.data = pd.read_csv(self.path)
         self.x = self.data.ix[:,2:]
+        
         if expert_feature_only:
-            self.x = self.x.ix[:,-16:]
+            self.r = Variable(torch.FloatTensor(list(map(lambda name: 1 \
+                                                         if 'worst' in name else 0,
+                                                         self.x.columns))))
+            
+            self.x = self.x.ix[:,self.r.nonzero().view(-1)]
+
         self.y = self.data['In-hospital_death']
 
         xtrain, self.xte, ytrain, self.yte = train_test_split(self.x,
