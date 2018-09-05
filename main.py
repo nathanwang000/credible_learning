@@ -78,6 +78,8 @@ class ParamSearch:
 
     def run(self, n_bootstrap=100):
         map_parallel(trainData, self.tasks, self.n_cpus)
+        # for task in self.tasks:
+        #     trainData(*task)
 
         # select a model to run: split on auc and sparsity
         aucs = []
@@ -138,7 +140,7 @@ def reg_exp(regs, n_cpus=None, n_bootstrap=30):
     alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
     for reg in regs:
         for alpha in alphas:
-            name = reg.__name__ + '^' + str(alpha)
+            name = reg.__name__ + '_dup_' + '^' + str(alpha)
             ps.add_param(name, reg, alpha)
 
     ps.run(n_bootstrap)
@@ -167,6 +169,24 @@ def duplicate_exp(regs, n_cpus=None, n_bootstrap=30):
             ps.add_param(name, reg, alpha)
 
     ps.run(n_bootstrap)
+
+def two_stage_exp(threshold=0.90, n_cpus=None, n_bootstrap=30):
+    '''
+    remove features by setting a threshold on correlation, 
+    then apply l2 regularization on the remaining features
+    '''
+    m = Mimic2(mode='total', two_stage=True, threshold=float(threshold))
+    ps = ParamSearch(m, n_cpus)
+
+    reg = ridge
+    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+
+    for alpha in alphas:
+        name = 'two_stage_ridge_' + str(threshold) + '^' + str(alpha)
+        ps.add_param(name, reg, alpha)
+
+    ps.run(n_bootstrap)
+
     
 #####################################################
 def wridge1_5(*args, **kwargs):

@@ -12,7 +12,7 @@ class Mimic2(Dataset):
 
     def __init__(self, mode='total', random_risk=False,
                  expert_feature_only=False, duplicate=0,
-                 two_stage=False):
+                 two_stage=False, threshold=None):
         '''
         mode in [dead, survivor, total]: ways to impute missingness
         '''
@@ -61,12 +61,37 @@ class Mimic2(Dataset):
             r = np.random.permutation(self.r.data.numpy())            
             self.r = Variable(torch.from_numpy(r))
 
+        # handle duplicate experiment
         for i in range(duplicate):
             self.xtrain = np.hstack([self.xtrain, self.xtrain])
             self.xval = np.hstack([self.xval, self.xval])
             self.xte = np.hstack([self.xte, self.xte])
             self.r = torch.cat([self.r, self.r])
-                    
+
+        # use training data to delete variables for two stage approach
+        risk_set = set(self.r.nonzero().view(-1).data.numpy())
+        if two_stage:
+            kept = set(self.r.nonzero().view(-1).data.numpy())
+            corr = np.corrcoef(self.xtrain.T)
+            d = self.r.numel()
+            for i in range(d):
+                if i not in kept: # unknown variable
+                    # determine if we should keep it
+                    keep = True
+                    for j in range(len(corr[i])):
+                        if j in kept and corr[i, j] >= threshold:
+                            keep = False
+                            break
+                    if keep:
+                        kept.add(i) # later unknown correlated with this will not keep
+
+            # organize the data and risk
+            kept = list(kept)
+            self.r = Variable(torch.FloatTensor([(1 if i in risk_set else 0)\
+                                                 for i in kept]))
+            self.xtrain = self.xtrain[:, kept]
+            self.xval = self.xval[:, kept]
+            self.xte = self.xte[:, kept]
 
     def __len__(self):
         return len(self.data)
