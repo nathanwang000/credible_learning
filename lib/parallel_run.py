@@ -1,6 +1,7 @@
 import multiprocessing
 import numpy as np
 import time
+from pathos.multiprocessing import _ProcessPool as Pool
 
 def iterable(a):
     try:
@@ -22,7 +23,7 @@ def map_parallel(f, tasks, n_cpus=None):
         n_cpus = min(int(multiprocessing.cpu_count() / 2), len(tasks))
 
     result_list = []
-    pool = multiprocessing.Pool(n_cpus)
+    pool = Pool(n_cpus) #multiprocessing.Pool(n_cpus)
     
     for task in tasks:
         if not iterable(task):

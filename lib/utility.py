@@ -86,7 +86,7 @@ def calc_loss(model, data, loss):
     denom = 0
     for x, y in data:
         x, y = to_var(x), to_var(y)
-        regret = loss(model(x), y).data[0]
+        regret = loss(model(x), y).item()
         m = x.size(0)
         cost += regret * m
         denom += m

@@ -64,7 +64,7 @@ class Trainer(object):
         regret = self.loss(yhat, y)
         regret.backward()
         self.optimizer.step()
-        return yhat, regret.data[0]
+        return yhat, regret.item()
 
     def fitData(self, data, batch_size=100, n_epochs=10, print_every=10,
                 valdata=None):

@@ -82,3 +82,37 @@ def eye_loss(loss, alpha, theta, r): # loss is the data loss
         return loss(yhat, y) + eye(theta[1] - theta[0]) * alpha
     
     return ret
+
+def eye_loss_height(h):
+
+    def eye_loss(loss, alpha, theta, r): # loss is the data loss
+
+        def eye(x):
+            # nonlocal r # default to all unknown
+            # r = r or Variable(torch.zeros(x.numel()), requires_grad=False)
+            l1 = torch.abs(x * (1-r)).sum()
+            l2sq = (r * x).dot(r * x)
+            return  l1 + torch.sqrt(h*l1**2 + l2sq)
+
+        def ret(yhat, y):
+            return loss(yhat, y) + eye(theta[1] - theta[0]) * alpha
+    
+        return ret
+
+    eye_loss.__name__ = 'eye_loss_alpha{}'.format(h)
+    return eye_loss
+
+def eye_loss2(loss, alpha, theta, r): # loss is the data loss
+
+    def eye(x):
+        # nonlocal r # default to all unknown
+        # r = r or Variable(torch.zeros(x.numel()), requires_grad=False)
+        l1 = torch.abs(x * (1-r)).sum()
+        l2sq = x.dot(x)
+        return  l1 + torch.sqrt(l2sq)
+
+    def ret(yhat, y):
+        return loss(yhat, y) + eye(theta[1] - theta[0]) * alpha
+    
+    return ret
+
