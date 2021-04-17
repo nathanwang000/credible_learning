@@ -30,3 +30,8 @@ python eval_MIMIC2.py
 #+END_SRC
 
 We provide a small example of using this package, please look through code in [[example.py]].
+
+Install dependencies with 
+#+BEGIN_SRC bash
+pipenv install
+#+END_SRC

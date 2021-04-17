@@ -11,11 +11,12 @@ from torch.utils.data.sampler import WeightedRandomSampler
 from torch.utils.data import DataLoader
 import torch
 from torch import nn
-from PIL import Image
 from torch.autograd import Function
 from scipy.linalg import block_diag
 import os
-from sklearn.externals import joblib
+from PIL import Image    
+# from sklearn.externals import joblib
+import joblib
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 
 def to_cuda(x):
@@ -85,7 +86,7 @@ def calc_loss(model, data, loss):
     denom = 0
     for x, y in data:
         x, y = to_var(x), to_var(y)
-        regret = loss(model(x), y).data[0]
+        regret = loss(model(x), y).item() #.data[0]
         m = x.size(0)
         cost += regret * m
         denom += m

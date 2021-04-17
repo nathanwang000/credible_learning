@@ -41,7 +41,7 @@ def map_parallel(f, tasks, n_cpus=None):
             print('{}/{} done'.format(sum(done_list), len(result_list)))
             if np.all(done_list):
                 break
-            time.sleep(3)
+            time.sleep(1)
         except:
             pool.terminate()
             raise

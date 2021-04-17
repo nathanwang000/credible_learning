@@ -11,10 +11,11 @@ import torch, os
 from scipy.stats import ttest_rel
 from torch.autograd import Variable
 from sklearn.model_selection import train_test_split
-from sklearn.externals import joblib
+# from sklearn.externals import joblib
+import joblib
 import sys
 
-def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300, 
+def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300,
               learning_rate=1e-3, batch_size=4000, r=None, test=False):
     '''
     return validation auc, average precision, score1
@@ -77,7 +78,9 @@ class ParamSearch:
         self.hyperparams.append((name, reg, alpha))
 
     def run(self, n_bootstrap=100):
-        map_parallel(trainData, self.tasks, self.n_cpus)
+        # map_parallel(trainData, self.tasks, self.n_cpus) # todo: need to fix
+        for task in self.tasks: # the above function is silent with mistakes
+            trainData(*task)
 
         # select a model to run: split on auc and sparsity
         aucs = []
@@ -104,7 +107,7 @@ class ParamSearch:
         b = np.argmax(aucs.mean(0))
         discardset = set([])
         for a in range(len(models)):
-            diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(np.int)
+            diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(int)
             if diffs.sum() / diffs.shape[0] <= 0.05:
                 discardset.add(a)
 

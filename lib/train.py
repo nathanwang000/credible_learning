@@ -18,7 +18,8 @@ from torchvision.transforms import ToTensor
 from time import gmtime, strftime
 from torch.distributions import Categorical
 import os
-from sklearn.externals import joblib
+# from sklearn.externals import joblib
+import joblib
 from sklearn.cluster import KMeans, SpectralClustering
 
 os.system('mkdir -p models/')  # always save in models
@@ -64,7 +65,7 @@ class Trainer(object):
         regret = self.loss(yhat, y)
         regret.backward()
         self.optimizer.step()
-        return yhat, regret.data[0]
+        return yhat, regret.item() #regret.data[0]
 
     def fitData(self, data, batch_size=100, n_epochs=10, print_every=10,
                 valdata=None):
@@ -379,8 +380,8 @@ class InterpretableTrainer(Trainer):
                 weight_cost.mean().backward()
 
             if self.print_every != 0 and self.count % self.print_every == 0:
-                hz = _z_entropy_loss.mean().data[0]
-                hyz = _y_entropy_loss.mean().data[0]
+                hz = _z_entropy_loss.mean().item() #.data[0]
+                hyz = _y_entropy_loss.mean().item() #.data[0]
                 
                 self.writer.add_scalar('loss/z_entropy',
                                        hz,
@@ -428,7 +429,7 @@ class InterpretableTrainer(Trainer):
         
         self.optSwitch.step()
         self.optWeight.step()        
-        return yhat, regret.data[0]
+        return yhat, regret.item() #.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10, valdata=None, val_theta=None,
             use_auc=False):
@@ -716,7 +717,7 @@ class AutoEncoderTrainer(object):
         regret = self.loss(yhat, x) # here autoencoder want to compare to x
         regret.backward()
         self.optimizer.step()
-        return yhat, regret.data[0]
+        return yhat, regret.item() #.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
             valdata=None, val_theta=None):
@@ -943,7 +944,7 @@ class WeightNetTrainer(InterpretableTrainer):
         regret = self.loss(yhat, y)
         regret.backward()
         self.optimizer.step()
-        return yhat, regret.data[0]
+        return yhat, regret.item() #.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
             valdata=None, val_theta=None, use_auc=False):
@@ -1102,7 +1103,7 @@ class MLPTrainer(InterpretableTrainer):
         regret = self.loss(yhat, y)
         regret.backward()
         self.optimizer.step()
-        return yhat, regret.data[0]
+        return yhat, regret.item() #.data[0]
 
     def fit(self, data, batch_size=100, n_epochs=10,
             valdata=None, val_theta=None, use_auc=False):

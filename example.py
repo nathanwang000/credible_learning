@@ -10,6 +10,7 @@ from lib.regularization import eye_loss
 from sklearn.metrics import accuracy_score
 import torch
 from torch.autograd import Variable
+from torch.optim import SGD
 import os
 
 def model_acc(model, x, y):                                          
@@ -20,8 +21,9 @@ def model_acc(model, x, y):
 n, d = 1000, 2  
 
 def gendata(): 
-    x = np.random.randn(n, d)
-    y = (x.sum(1) > 0).astype(np.int)
+    a = np.random.randn(n)
+    x = np.vstack([a, a]).T # perfectly correlated data
+    y = (x.sum(1) > 0).astype(int)
     return x, y
 
 xtr, ytr = gendata()
@@ -34,12 +36,13 @@ data = DataLoader(train_data, batch_size=100, shuffle=True)
 n_output = 2 # binary classification task         
 model = LR(d, n_output)            
 learning_rate = 0.01
-alpha = 0.08  # regularization strength                                  
+alpha = 0.1  # regularization strength                                  
 
 reg_parameters = model.i2o.weight
-t = Trainer(model, lr=learning_rate, risk_factors=r, alpha=alpha,
+t = Trainer(model, optimizer=SGD(model.parameters(), lr=learning_rate),
+            lr=learning_rate, risk_factors=r, alpha=alpha,
             regularization=eye_loss, reg_parameters=reg_parameters)  
-t.fit(data, n_epochs=60, print_every=50)
+t.fit(data, n_epochs=100, print_every=100)
 
 print('done fitting model')
 print("train accuracy", model_acc(model, xtr, ytr))

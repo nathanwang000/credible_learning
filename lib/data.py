@@ -1,5 +1,6 @@
 import numpy as np
-from sklearn.externals import joblib
+# from sklearn.externals import joblib
+import joblib
 import torch
 from torch import nn
 from torch.autograd import Variable
@@ -16,9 +17,9 @@ class Mimic2(Dataset):
         '''
         self.path = 'data/mimic/' + mode + '_mean_finalset.csv'
         self.data = pd.read_csv(self.path)
-        self.x = self.data.ix[:,2:]
+        self.x = self.data.iloc[:,2:] # ix deprecated
         if expert_feature_only:
-            self.x = self.x.ix[:,-16:]
+            self.x = self.x.iloc[:,-16:] # ix deprecated
         self.y = self.data['In-hospital_death']
 
         self.xtr, self.xte, self.ytr, self.yte = train_test_split(self.x,
@@ -39,9 +40,12 @@ class Mimic2(Dataset):
         self.xtrain = scaler.transform(self.xtrain)
         self.xval = scaler.transform(self.xval)
         self.xte = scaler.transform(self.xte)  
-        self.ytrain = self.ytrain.as_matrix()
-        self.yval = self.yval.as_matrix()
-        self.yte = self.yte.as_matrix()        
+        # self.ytrain = self.ytrain.as_matrix()
+        # self.yval = self.yval.as_matrix()
+        # self.yte = self.yte.as_matrix()        
+        self.ytrain = np.array(self.ytrain)
+        self.yval = np.array(self.yval)
+        self.yte = np.array(self.yte)
 
         # risk factors to use
         self.r = Variable(torch.FloatTensor(list(map(lambda name: 1 \
@@ -49,9 +53,6 @@ class Mimic2(Dataset):
                                                      self.x.columns))))
         if random_risk:
             np.random.seed(42)
-            # nones = int(sum(self.r).data[0])
-            # r = np.zeros_like(self.r.data.numpy())
-            # r[:nones] = 1
             r = np.random.permutation(self.r.data.numpy())            
             self.r = Variable(torch.from_numpy(r))
 
