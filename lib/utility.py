@@ -18,9 +18,10 @@ from PIL import Image
 # from sklearn.externals import joblib
 import joblib
 from torch.utils.data import Dataset, DataLoader, TensorDataset
+from lib.settings import USE_GPU
 
 def to_cuda(x):
-    if torch.cuda.is_available():
+    if USE_GPU and torch.cuda.is_available():
         x = x.cuda()
     return x
 
@@ -86,7 +87,8 @@ def calc_loss(model, data, loss):
     denom = 0
     for x, y in data:
         x, y = to_var(x), to_var(y)
-        regret = loss(model(x), y).item() #.data[0]
+        regret = loss(model(x), y).item()
+
         m = x.size(0)
         cost += regret * m
         denom += m

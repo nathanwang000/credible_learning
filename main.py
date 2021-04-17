@@ -4,7 +4,8 @@ import numpy as np
 from lib.model import LR
 from lib.train import Trainer, prepareData
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-from lib.regularization import eye_loss, wridge, wlasso, lasso, enet, owl, ridge
+from lib.regularization import eye_loss, wridge, wlasso, lasso, \
+    enet, owl, ridge, eye_loss2, eye_loss_height
 from sklearn.metrics import accuracy_score
 from lib.utility import get_y_yhat, model_auc, calcAP, sweepS1, sparsity, bootstrap
 import torch, os
@@ -78,9 +79,9 @@ class ParamSearch:
         self.hyperparams.append((name, reg, alpha))
 
     def run(self, n_bootstrap=100):
-        # map_parallel(trainData, self.tasks, self.n_cpus) # todo: need to fix
-        for task in self.tasks: # the above function is silent with mistakes
-            trainData(*task)
+        map_parallel(trainData, self.tasks, self.n_cpus)
+        # for task in self.tasks: # the above function is silent with mistakes
+        #     trainData(*task)
 
         # select a model to run: split on auc and sparsity
         aucs = []
@@ -121,20 +122,33 @@ class ParamSearch:
         print('name', name)        
         trainData(name, self.data, reg, alpha, test=True)
 
-def random_risk_exp(n_cpus=None, n_bootstrap=30):
+def random_risk_exp(regs, n_cpus=None, n_bootstrap=30):
     m = Mimic2(mode='total', random_risk=True)
     ps = ParamSearch(m, n_cpus)
 
     reg = eye_loss    
     alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
 
-    for alpha in alphas:
-        name = 'random_risk_eye' + '^' + str(alpha)
-        ps.add_param(name, reg, alpha)
+    for reg in regs:
+        for alpha in alphas:
+            name = 'random_risk_' + reg.__name__ + '^' + str(alpha)
+            ps.add_param(name, reg, alpha)
 
     ps.run(n_bootstrap)
 
 def reg_exp(regs, n_cpus=None, n_bootstrap=30):
+    m = Mimic2(mode='total')
+    ps = ParamSearch(m, n_cpus)
+    
+    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+    for reg in regs:
+        for alpha in alphas:
+            name = reg.__name__ + '^' + str(alpha)
+            ps.add_param(name, reg, alpha)
+
+    ps.run(n_bootstrap)
+
+def eye_height_exp(regs, n_cpus=None, n_bootstrap=30):
     m = Mimic2(mode='total')
     ps = ParamSearch(m, n_cpus)
     
@@ -155,6 +169,35 @@ def expert_feature_only_exp(n_cpus=None, n_bootstrap=30):
 
     for alpha in alphas:
         name = 'expert_only_ridge' + '^' + str(alpha)
+        ps.add_param(name, reg, alpha)
+
+    ps.run(n_bootstrap)
+
+def duplicate_exp(regs, n_cpus=None, n_bootstrap=30):
+    m = Mimic2(mode='total', duplicate=1)
+    ps = ParamSearch(m, n_cpus)
+    
+    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+    for reg in regs:
+        for alpha in alphas:
+            name = reg.__name__ + '_dup_' + '^' + str(alpha)
+            ps.add_param(name, reg, alpha)
+
+    ps.run(n_bootstrap)
+
+def two_stage_exp(threshold=0.90, n_cpus=None, n_bootstrap=30):
+    '''
+    remove features by setting a threshold on correlation, 
+    then apply l2 regularization on the remaining features
+    '''
+    m = Mimic2(mode='total', two_stage=True, threshold=float(threshold))
+    ps = ParamSearch(m, n_cpus)
+
+    reg = ridge
+    alphas = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+
+    for alpha in alphas:
+        name = 'two_stage_ridge_' + str(threshold) + '^' + str(alpha)
         ps.add_param(name, reg, alpha)
 
     ps.run(n_bootstrap)

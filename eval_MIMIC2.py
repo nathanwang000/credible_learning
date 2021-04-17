@@ -14,9 +14,16 @@ import glob
 # from sklearn.externals import joblib
 import joblib
 from pandas import DataFrame
+import sys
+
+if len(sys.argv) == 2:
+    model_dir = sys.argv[1]
+else:
+    model_dir = 'models'
+print('looking at {}/'.format(model_dir))
 
 raw_data = []
-for fn in glob.glob('models/test*.pkl'):
+for fn in glob.glob('{}/test*.pkl'.format(model_dir)):
     name = fn.split('/')[-1].split('.pkl')[0]
     name, alpha = name.split('^')
     if 'test' in name: name = name[4:]+'*'
