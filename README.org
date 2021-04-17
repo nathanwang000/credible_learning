@@ -35,3 +35,8 @@ Install dependencies with
 #+BEGIN_SRC bash
 pipenv install
 #+END_SRC
+
+One can load the trained final model by
+#+BEGIN_SRC python
+torch.load("models/test*.pt") # replace * with the actual model name
+#+END_SRC

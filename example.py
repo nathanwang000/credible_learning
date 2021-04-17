@@ -36,10 +36,10 @@ data = DataLoader(train_data, batch_size=100, shuffle=True)
 n_output = 2 # binary classification task         
 model = LR(d, n_output)            
 learning_rate = 0.01
-alpha = 0.1  # regularization strength                                  
+alpha = 0.2  # regularization strength                                  
 
 reg_parameters = model.i2o.weight
-t = Trainer(model, optimizer=SGD(model.parameters(), lr=learning_rate),
+t = Trainer(model,
             lr=learning_rate, risk_factors=r, alpha=alpha,
             regularization=eye_loss, reg_parameters=reg_parameters)  
 t.fit(data, n_epochs=100, print_every=100)
