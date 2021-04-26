@@ -1,5 +1,4 @@
 from lib.data import Mimic2
-from lib.parallel_run import map_parallel
 import numpy as np
 from lib.model import LR
 from lib.train import Trainer, prepareData
@@ -12,7 +11,8 @@ import torch, os
 from scipy.stats import ttest_rel
 from torch.autograd import Variable
 from sklearn.model_selection import train_test_split
-# from sklearn.externals import joblib
+from joblib import Parallel, delayed
+import tqdm
 import joblib
 import sys
 
@@ -64,7 +64,7 @@ def trainData(name, data, regularization=eye_loss, alpha=0.01, n_epochs=300,
     return val_auc, ap, s1, sp
 
 class ParamSearch:
-    def __init__(self, data, n_cpus=None):
+    def __init__(self, data, n_cpus=10):
         self.tasks = []
         self.hyperparams = []
         self.n_cpus = n_cpus
@@ -78,12 +78,17 @@ class ParamSearch:
             self.tasks.append((name, self.data, reg, alpha))
         self.hyperparams.append((name, reg, alpha))
 
-    def run(self, n_bootstrap=100):
-        map_parallel(trainData, self.tasks, self.n_cpus)
-        # for task in self.tasks: # the above function is silent with mistakes
-        #     trainData(*task)
+    def select_on_auc_sp(self, n_bootstrap=100):
+        '''
+        return the index in self.hyperparams chosen
 
-        # select a model to run: split on auc and sparsity
+        hyper parameter selection based on auc and sp
+        choose the hyper parameter that has no auc difference with top 
+        but is the sparsest model
+
+        This is the criteria used in the learning credible models paper
+        '''
+        print('hyperparam select using auc and sparsity')        
         aucs = []
         models = []
         sparsities = []
@@ -116,9 +121,82 @@ class ParamSearch:
         chosen, sp = max(filter(lambda x: x[0] not in discardset,
                                 enumerate(sparsities)),
                          key=lambda x: x[1])
+        return chosen
+    
+    def select_on_auc(self, *args, **kwargs):
+        '''hyperparameter selection based on auc alone
+        return index within self.hyperparams that need to retrain
+        '''
+        print('hyperparam select using auc')
+        aucs = []
+        sparsities = []
+        for name, reg, alpha in self.hyperparams:
+            # load the model        
+            model = torch.load('models/' + name + '.pt')
+            aucs.append(model_auc(model, self.valdata))
 
+        # choose the one with largest auc
+        chosen, auc = max(enumerate(aucs),
+                          key=lambda x: x[1])
+        return chosen
+
+    def select_on_auc_ap(self, n_bootstrap=100):
+        '''
+        return the index in self.hyperparams chosen
+
+        hyper parameter selection based on auc and ap
+        choose the hyper parameter that has no auc difference with top 
+        but is the model with highest average precision (align with expert)
+        '''
+        print('hyperparam select using auc and ap')
+        aucs = []
+        models = []
+        aps = []
+        for name, reg, alpha in self.hyperparams:
+            # load the model        
+            model = torch.load('models/' + name + '.pt')
+            reg_parameters = model.i2o.weight
+            ap = calcAP(self.data.r.data.numpy(),
+                        (reg_parameters[1] - reg_parameters[0]).data.numpy())
+            models.append(model)
+            aps.append(ap)
+
+        for _ in range(n_bootstrap):
+            test = bootstrap(self.valdata)
+            local_aucs = []
+            for model in models:
+                # bootstrap for CI on auc
+                local_aucs.append(model_auc(model, test))
+            aucs.append(local_aucs)
+        aucs = np.array(aucs)
+
+        # only keep those with high auc
+        b = np.argmax(aucs.mean(0))
+        discardset = set([])
+        for a in range(len(models)):
+            diffs = ((aucs[:,a] - aucs[:,b]) >= 0).astype(int)
+            if diffs.sum() / diffs.shape[0] <= 0.05:
+                discardset.add(a)
+
+        # choose the one with largest average precision
+        chosen, ap = max(filter(lambda x: x[0] not in discardset,
+                                enumerate(aps)),
+                         key=lambda x: x[1])
+        return chosen
+    
+    def run(self, n_bootstrap=100):
+
+        if self.n_cpus is None: n_jobs = 10
+        else: n_jobs = self.n_cpus
+        Parallel(n_jobs=n_jobs)(delayed(trainData)(*task) for task in self.tasks)
+
+        # select a model to run
+        chosen_idx = self.select_on_auc_sp(n_bootstrap=n_bootstrap)
+        # chosen_idx = self.select_on_auc() # don't need bootstrap
+        # chosen_idx = self.select_on_auc_ap(n_bootstrap=n_bootstrap)
+        
         # retrian the chosen model
-        name, reg, alpha = self.hyperparams[chosen]
+        name, reg, alpha = self.hyperparams[chosen_idx]
         print('name', name)        
         trainData(name, self.data, reg, alpha, test=True)
 

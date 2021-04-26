@@ -13,6 +13,9 @@ tensorboardx = "*"
 torchvision = "*"
 pillow = "*"
 pathos = "*"
+jupyter = "*"
+jupyterlab = "*"
+tqdm = "*"
 
 [requires]
 python_version = "3.7"
