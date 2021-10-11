@@ -27,7 +27,7 @@ for fn in glob.glob('{}/test*.pkl'.format(model_dir)):
     name = fn.split('/')[-1].split('.pkl')[0]
     name, alpha = name.split('^')
     if 'test' in name: name = name[4:]+'*'
-    auc, ap, s1, sp = joblib.load(fn)
-    raw_data.append([name, alpha, auc, ap, s1, sp])
-df = DataFrame(data=raw_data, columns=['method name', 'alpha', 'auc', 'ap', 'min(recall, precision)', 'sparsity'])
-print(df.sort_values(['auc'], ascending=False))
+    ap, auc, s1, clean_auc, clean_s1 = joblib.load(fn)
+    raw_data.append([name, alpha, ap, auc, s1, clean_auc, clean_s1])
+df = DataFrame(data=raw_data, columns=['method name', 'alpha', 'AP', 'auc (biased)', 'min(recall, precision) (biased)', 'auc (clean)', 'min(recall, precision) (clean)'])
+print(df.sort_values(['auc (clean)'], ascending=False))

@@ -5,6 +5,50 @@ import torch.nn.functional as F
 import numpy as np
 from lib.utility import to_np, to_var, check_nan, to_cuda, onehotize
 
+###### CCM model starts ##############
+def dfs_freeze(model):
+    ''' 
+    freeze all paramters of a pytorch model
+    '''
+    for name, child in model.named_children():
+        for param in child.parameters():
+            param.requires_grad = False # doesn't matter
+            param.grad = None
+        dfs_freeze(child)
+
+class CCM_res(nn.Module):
+    '''
+    residual CCM
+    
+    to use it:
+    net = CCM_res(cbm, x2u) 
+    
+    here cbm is the CBM model trained on biased dataset
+    x2u is an arbitrary model that takes x and output a prediction
+    I initialized x2u to be STD(X) in this work
+    '''
+    def __init__(self, net1, net2): 
+        super().__init__()
+        self.net1 = net1
+        dfs_freeze(self.net1)
+        self.i2o = net2
+        self.softmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, x):
+        with torch.no_grad():
+            self.net1.eval()
+            o = self.net1(x)
+        return self.softmax(o + self.i2o(x))
+
+class CBM(nn.Module):
+    def __init__(self, r, expert_only_model): 
+        super().__init__()
+        self.r = r
+        self.net = expert_only_model
+        
+    def forward(self, x):
+        return self.net(x[:, self.r==1])
+    
 ###### non linear credibility start #############
 class Switch(nn.Module):
     def __init__(self, input_size, switch_size, mtl=False):

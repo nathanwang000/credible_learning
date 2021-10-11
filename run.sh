@@ -1,18 +1,17 @@
 #!/bin/bash
 
-# python main.py 'reg_exp' '[owl]'
-
-# only using expert feature
+# cbm
 python main.py 'expert_feature_only_exp'
 
-# random risk
-for reg in {'[eye_loss]'}
+# stdcx
+python main.py 'stdcx_shortcut_exp'
+
+# compare different regularizations # ridge is std(x)
+for reg in {'[eye_loss]','[ridge]',}
 do
-    python main.py 'random_risk_exp' $reg
+    python main.py 'shortcut_exp' $reg
 done
 
-# compare differnet regularizations
-for reg in {'[eye_loss]','[ridge]','[lasso]','[enet]','[wridge,wridge1_5,wridge3]','[wlasso,wlasso1_5,wlasso3]','[owl]'}
-do
-    python main.py 'reg_exp' $reg
-done
+# ccm res
+python main.py 'res_shortcut_exp' '["model_expert_only/testexpert_only_ridge^0.1.pt"]'
+

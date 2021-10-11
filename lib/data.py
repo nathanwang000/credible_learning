@@ -1,6 +1,7 @@
 import numpy as np
-# from sklearn.externals import joblib
+import copy
 import joblib
+import pathlib
 import torch
 from torch import nn
 from torch.autograd import Variable
@@ -13,11 +14,13 @@ class Mimic2(Dataset):
 
     def __init__(self, mode='total', random_risk=False,
                  expert_feature_only=False, duplicate=0,
+                 dupr=0, # whether to duplicate risk factors
                  two_stage=False, threshold=None):
         '''
         mode in [dead, survivor, total]: ways to impute missingness
         '''
-        self.path = 'data/mimic/' + mode + '_mean_finalset.csv'
+        pwd = pathlib.Path(__file__).parent.absolute()
+        self.path = f'{pwd}/../data/mimic/' + mode + '_mean_finalset.csv'
         self.data = pd.read_csv(self.path)
         self.x = self.data.iloc[:,2:]
         
@@ -94,6 +97,93 @@ class Mimic2(Dataset):
             self.xval = self.xval[:, kept]
             self.xte = self.xte[:, kept]
 
+        # save for later manipulation of the input
+        self.xtrain_ = copy.deepcopy(self.xtrain)
+        self.xval_ = copy.deepcopy(self.xval)
+        self.xte_ = copy.deepcopy(self.xte)
+        self.r_ = copy.deepcopy(self.r)
+
+        # duplicate risk factors after the original data are saved
+        self.dupr = dupr
+        for i in range(self.dupr):
+            self._dupr()
+
+    def related_to_c(self):
+        '''return a binary vector that is related to c in train'''
+        def relate(x, c):
+            '''x is a numpy array of features (n, 1), c:(n,sum(r))'''
+            a = np.hstack([x, c])
+            corr = np.corrcoef(a)
+            # import pdb; pdb.set_trace()            
+            for i in range(1, len(a)):
+                if corr[0, i] > 0.87:
+                    return True
+            return False
+
+        if not hasattr(self, 'remove_indices'):
+            print('constructing remove indices')
+
+            remove_indices = []
+            c = self.xtrain_[:, self.r_==1]
+            for idx in range(len(self.r_)):
+                if self.r_[idx] == 1: continue # don't remove c
+                # remove if correlation too high with c
+                if relate(self.xtrain_[:, [idx]], c):
+                    remove_indices.append(idx)
+
+            self.remove_indices = remove_indices
+
+        print(f"{len(self.remove_indices)} features to be removed")
+        return self.remove_indices
+            
+        # return self.r_ == 0
+    
+    def clean(self):
+        '''applies to the shortcut experiment, set shortcut to 0 b/c standardized'''
+        # remove variables in which C can predict with high accuracy
+        def set_x(x):
+            x = copy.deepcopy(x)
+            x[:, self.related_to_c()] = 0
+            return x
+
+        self.xtrain = set_x(self.xtrain_)
+        self.xval = set_x(self.xval_)
+        self.xte = set_x(self.xte_)        
+        self.r = self.r_
+        
+        # dr = int(self.r_.sum().item())        
+        # self.xtrain = np.hstack([self.xtrain_, torch.zeros(len(self.xtrain_), dr)])
+        # self.xval = np.hstack([self.xval_, torch.zeros(len(self.xval_), dr)])
+        # self.xte = np.hstack([self.xte_, torch.zeros(len(self.xte_), dr)])
+        # self.r = torch.cat([self.r_, torch.zeros(dr)])
+        
+        for i in range(self.dupr):
+            self._dupr()
+
+    def bias(self):
+        '''applies to the shortcut experiment'''
+        self.xtrain = self.xtrain_
+        self.xval = self.xval_
+        self.xte = self.xte_
+        self.r = self.r_
+        
+        # dr = int(self.r_.sum().item())        
+        # self.xtrain = np.hstack([self.xtrain_, self.xtrain_[:, self.r_==1]])
+        # self.xval = np.hstack([self.xval_, self.xval_[:, self.r_==1]])
+        # self.xte = np.hstack([self.xte_, self.xte_[:, self.r_==1]])
+        # self.r = torch.cat([self.r_, torch.zeros(dr)])
+        
+        for i in range(self.dupr):
+            self._dupr()
+
+    def _dupr(self):
+        '''duplicate risk factors for STD(C, X) experiments'''
+        dr = int(self.r.sum().item())        
+        self.xtrain = np.hstack([self.xtrain, self.xtrain[:, self.r==1]])
+        self.xval = np.hstack([self.xval, self.xval[:, self.r==1]])
+        self.xte = np.hstack([self.xte, self.xte[:, self.r==1]])
+        self.r = torch.cat([self.r, torch.ones(dr)])
+        
     def __len__(self):
         return len(self.data)
     
