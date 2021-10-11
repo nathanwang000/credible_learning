@@ -112,11 +112,10 @@ class Mimic2(Dataset):
         '''return a binary vector that is related to c in train'''
         def relate(x, c):
             '''x is a numpy array of features (n, 1), c:(n,sum(r))'''
-            a = np.hstack([x, c])
-            corr = np.corrcoef(a)
-            # import pdb; pdb.set_trace()            
-            for i in range(1, len(a)):
-                if corr[0, i] > 0.87:
+            a = np.hstack([x, c]) # (n, 1+sum(r))
+            corr = np.corrcoef(a.T) # (1+sum(r), 1+sum(r))
+            for i in range(1, len(a[0])):
+                if corr[0, i] > 0.85: # (0.85, 13)
                     return True
             return False
 
