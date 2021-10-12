@@ -110,12 +110,14 @@ class Mimic2(Dataset):
 
     def related_to_c(self):
         '''return a binary vector that is related to c in train'''
-        def relate(x, c):
+        def relate(x, c, threshold=0.8, dropout=False):
             '''x is a numpy array of features (n, 1), c:(n,sum(r))'''
+            if dropout: return np.random.uniform(0,1) < threshold
+            
             a = np.hstack([x, c]) # (n, 1+sum(r))
             corr = np.corrcoef(a.T) # (1+sum(r), 1+sum(r))
             for i in range(1, len(a[0])):
-                if corr[0, i] > 0.85: # (0.85, 13)
+                if corr[0, i] > threshold:
                     return True
             return False
 
